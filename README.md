@@ -1,3 +1,5 @@
+**English** · [中文](README.zh-CN.md)
+
 # dsh-obsidian
 
 An Obsidian vault inside the DSH right Sidebar. **Install steps: [INSTALL.md](INSTALL.md).**
@@ -22,7 +24,7 @@ like the chat Session id, it is live state, not a fixture, and a harness that
 overwrote it would silently change which folder the user's plugin reads.
 
 A DeepSeek Harness **bundle** that puts an Obsidian vault in the app's **right
-Sidebar**: a `知识库` tab with the vault tree and full-vault search, a note page
+Sidebar**: a `知识库` (Knowledge Base) tab with the vault tree and full-vault search, a note page
 that renders Markdown the way Obsidian's reading view does and lets you edit the
 file in place, and — at the foot of the same panel — a conversation with an agent
 whose Session lives in the vault's own Workspace.

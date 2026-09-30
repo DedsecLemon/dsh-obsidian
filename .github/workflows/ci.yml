@@ -1,0 +1,40 @@
+name: CI
+
+# `render-check` and `mount-check` are self-contained: they stub the host over a
+# fake `fetch`, so they run anywhere with no vault and no Obsidian.
+#
+# `host-check` is deliberately NOT here. It drives the real HTTP routes against a
+# REAL knowledge base and asserts things about that vault's contents — that
+# `README.md` exists, that a wikilink resolves, that a note over the read cap is
+# truncated. Those assertions only mean something on a machine that has a vault,
+# so running it here would be a test of the fixture, not of the plugin. It is a
+# local harness: see INSTALL.md.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install the harness dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Both halves parse
+        run: |
+          node --check index.mjs
+          node --check client.js
+
+      - name: Client harness (seats, registrations, render, guards)
+        run: node test/render-check.cjs
+
+      - name: Mount harness (real jsdom mount: tree, note page, resize, first run)
+        run: node test/mount-check.cjs

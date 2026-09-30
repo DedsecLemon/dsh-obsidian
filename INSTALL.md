@@ -1,95 +1,125 @@
-# 安装到另一台电脑
+**English** · [中文](INSTALL.zh-CN.md)
 
-这个插件**不需要构建**:`index.mjs` 和 `client.js` 就是直接运行的源码,拷过去即可。
+# Installing on another machine
 
-## 1. 放好文件夹
+This plugin **needs no build**: `index.mjs` and `client.js` are the source that runs
+directly, so copying the folder over is enough.
 
-把整个 `dsh-obsidian` 文件夹放到一个固定的位置,例如:
+## 1. Put the folder in place
 
-- Windows:`D:\skill\dsh-obsidian`
-- macOS / Linux:`~/dsh-obsidian`
+Keep the whole `dsh-obsidian` folder somewhere stable, for example:
 
-路径里**尽量避免中文和空格**,能省掉一类麻烦。
+- Windows: `D:\skill\dsh-obsidian`
+- macOS / Linux: `~/dsh-obsidian`
 
-## 2. 挂进 DSH 的 profile
+**Avoid non-ASCII characters and spaces in the path** if you can — that skips a
+whole class of trouble.
 
-DSH 的插件挂在某个 **profile** 下,不是丢进目录就生效。编辑:
+## 2. Hook it into a DSH profile
+
+A DSH plugin hangs off a **profile**; dropping it into a directory is not enough. Edit:
 
 ```
-~/.dsh/profiles/<你的 profile>/package.json
+~/.dsh/profiles/<your profile>/package.json
 ```
 
-**a)** 在 `dependencies` 里加一行(路径换成**你自己的**):
+**a)** Add a line to `dependencies` (with **your own** path):
 
 ```json
 "dsh-obsidian": "link:D:/skill/dsh-obsidian"
 ```
 
-**b)** 在顶层的 `bundles` 数组里加上包名(没有这个字段就新建):
+**b)** Add the package name to the top-level `bundles` array (create the field if it
+does not exist):
 
 ```json
 "bundles": ["dsh-obsidian"]
 ```
 
-**c)** 在该 profile 目录下执行:
+**c)** Run this in that profile directory:
 
 ```
 pnpm install
 ```
 
-> 也可以直接让 DSH 里的 AI 代劳:告诉它「用 `plugin_manager` 把 `link:<你的路径>` 装成 bundle」。
-> 安装日志在 `~/.dsh/profiles/<profile>/.plugin-manager/logs/`。
+> Alternatively, let the AI inside DSH do it: tell it "use `plugin_manager` to install
+> `link:<your path>` as a bundle".
+> Install logs are under `~/.dsh/profiles/<profile>/.plugin-manager/logs/`.
 
-## 3. 重启 DSH
+## 3. Restart DSH
 
-- 改了 `index.mjs`(**宿主半**)→ 必须**重启进程**
-- 只改了 `client.js`(**客户端半**)→ 刷新页面即可
+- Changed `index.mjs` (the **host half**) → you must **restart the process**
+- Changed only `client.js` (the **client half**) → a page refresh is enough
 
-装好后左侧栏底部会出现 `知识库`。
+Once it is installed, `知识库` (Knowledge Base) appears at the foot of the left
+Sidebar.
 
-## 4. 第一次使用
+## 4. First run
 
-点开 `知识库`,它会先让你**选知识库文件夹**(会先自动探测 Obsidian 已注册的库)。
-选完才会有目录树 —— 在你确认之前它**不读任何文件夹**。
+Open `知识库` and it first asks you to **choose a vault folder** (it pre-detects the
+vaults Obsidian has already registered). Only then does the tree appear — until you
+confirm a folder it reads **nothing**.
 
-## 环境要求(缺了会怎样)
+## Requirements (and what is missing without them)
 
-| 需要的东西 | 缺了会怎样 |
+| What it needs | What is missing without it |
 |---|---|
-| 客户端服务 `slots`、`sidebarRightTabs`、`sidebarRight` | **插件整个不激活**(左侧栏没有任何入口) |
-| `sessions` + `workspaces` | 只是**没有底部对话框**,目录树/搜索/笔记页照常 |
-| `uiWorkspace` | 文件夹选择器打不开,改成手动设置路径 |
-| 宿主服务 `webServer` | 所有 HTTP 路由注册不上,面板没数据 |
-| 本机装有 Obsidian | 只有「在 Obsidian 中打开」不可用,其余功能不受影响 |
+| The client services `slots`, `sidebarRightTabs`, `sidebarRight` | **The entire plugin does not activate** (no entry anywhere in the left Sidebar) |
+| `sessions` + `workspaces` | Only the **conversation box at the foot**; the tree, search and note pages work as usual |
+| `uiWorkspace` | The folder picker will not open; set the path by hand instead |
+| The host service `webServer` | No HTTP route registers, so the panel has no data |
+| Obsidian installed on this machine | Only "open in Obsidian" is unavailable; nothing else is affected |
 
-前两项是历史踩过的坑:`inject` 里声明了拿不到的服务,会让**整个条目**不激活,`apply` 根本不会被调用。
+The first two are past scars: naming a service in `inject` that the profile does not
+hand out keeps the **whole entry** from activating, and `apply` is never called at
+all.
 
-## 不需要 node_modules
+## node_modules is not needed
 
-`node_modules` 只被 `test/` 下的三个 harness 需要。**跑测试才需要 `pnpm install`。**
+`node_modules` is needed only by the three harnesses under `test/`. **You need
+`pnpm install` only to run the tests.**
 
 ```
 cd dsh-obsidian
 pnpm install
-node test/render-check.cjs     # 客户端半:座位/注册/渲染 + 各类护栏
-node test/mount-check.cjs      # 真实 jsdom 挂载:树、笔记页、拖拽、搜索、首次引导
-node test/host-check.mjs       # 宿主半:全部 HTTP 路由 + 安全边界
+node test/render-check.cjs     # client half: seats/registrations/render + the guards
+node test/mount-check.cjs      # a real jsdom mount: tree, note page, drag, search, first run
+node test/host-check.mjs       # host half: every HTTP route + the security boundary
 ```
 
-> `host-check` 会读写**真实状态文件** `~/.dsh/dsh-obsidian/{chat,vault,diag}.json`。
-> 它自带备份/恢复,跑完会原样还原 —— **请勿手动删除这些文件**。
+> `host-check` reads and writes the **real state files**
+> `~/.dsh/dsh-obsidian/{chat,vault,diag}.json`. It backs them up and restores them
+> itself, putting them back exactly as they were — **do not delete these files by
+> hand**.
 
-## 状态文件
+### Why CI runs only the first two harnesses
+
+- `render-check.cjs` and `mount-check.cjs` are completely self-contained — the host
+  is stood in for by a fake `fetch`, so they need no real vault — and therefore
+  **run in CI**.
+- `host-check.mjs` drives the real HTTP routes and asserts things about **what one
+  particular vault contains** (that a given `README.md` exists, that a wikilink
+  resolves, that a note over the read cap is truncated), so it is **local only**.
+  Running it in CI would be testing the fixture, not the plugin.
+- Setting `DSH_OBSIDIAN_APP` lets it run in full (102 checks). Without it, the three
+  checks that depend on where Obsidian is installed are explicitly marked **skip**,
+  never passed off as a success.
+
+`.github/workflows/ci.yml` encodes exactly that split, and this section is kept in
+step with it.
+
+## State files
 
 ```
-Windows:     C:\Users\<你>\.dsh\dsh-obsidian\
+Windows:     C:\Users\<you>\.dsh\dsh-obsidian\
 macOS/Linux: ~/.dsh/dsh-obsidian/
 ```
 
-| 文件 | 内容 |
+| File | Contents |
 |---|---|
-| `vault.json` | 你选的知识库路径(优先于 Obsidian 注册表) |
-| `chat.json` | 底部对话框的会话 id(历史靠它留住) |
-| `diag.json` | 客户端自检报告(注册了哪些、有没有渲染报错) |
+| `vault.json` | The vault path you chose (outranks Obsidian's registry) |
+| `chat.json` | The Session id of the conversation box (the history lives or dies with it) |
+| `diag.json` | The client half's own self-check report (what registered, whether anything failed to render) |
 
-**拷到新电脑后这些文件不存在完全没关系** —— 第一次打开会重新问你选哪个知识库。
+**After copying to a new machine it is completely fine for these files not to
+exist** — the first launch asks again which vault to use.

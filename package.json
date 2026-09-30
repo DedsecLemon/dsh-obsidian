@@ -2,7 +2,7 @@
   "name": "dsh-obsidian",
   "version": "1.0.0",
   "private": true,
-  "description": "Obsidian vault in the DSH right Sidebar: vault tree, full-vault search, Obsidian-styled note pages with [[wikilink]] navigation and in-place editing, and a resizable conversation box served by a Session in the vault's own Workspace.",
+  "description": "把 Obsidian 知识库放进 DSH 右侧栏：目录树、全文搜索、Obsidian 排版风格的笔记页、可拖拽高度的对话框 / Obsidian vault in the DSH right sidebar: vault tree, full-vault search, Obsidian-styled note pages, and a resizable conversation box.",
   "type": "module",
   "main": "./index.mjs",
   "exports": {
@@ -19,6 +19,14 @@
     "README.md",
     "INSTALL.md"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DedsecLemon/dsh-obsidian.git"
+  },
+  "homepage": "https://github.com/DedsecLemon/dsh-obsidian#readme",
+  "bugs": {
+    "url": "https://github.com/DedsecLemon/dsh-obsidian/issues"
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
