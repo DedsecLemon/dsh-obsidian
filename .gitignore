@@ -1,0 +1,17 @@
+# Dependencies — only the test harnesses need them.
+node_modules/
+
+# Local state and logs. The plugin keeps its state OUTSIDE the repo, under
+# ~/.dsh/dsh-obsidian/, so nothing here should ever be committed.
+*.log
+diag.json
+chat.json
+vault.json
+
+# Editors and OS noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.bak
+*.bak-*
