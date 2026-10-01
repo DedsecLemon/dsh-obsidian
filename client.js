@@ -410,11 +410,17 @@ window.__ModuleLoader__.load({
 
 		const MAX_RENDER_LINES = 3000;
 		const SEARCH_DEBOUNCE_MS = 250;
+		/** The DOM id every rendered heading carries, and the outline scrolls to. */
+		const OUTLINE_ID_PREFIX = 'dsh-obsidian-outline-';
+		/** Two note pages can be open at once, so each one numbers its own anchors. */
+		let notePageSeq = 0;
 
 		/** Theme tokens with fallbacks, so the panel also survives a bare shell. */
 		const T = {
 			bgLayer1: 'var(--dsw-alias-bg-layer-1, rgba(127,127,127,0.06))',
 			bgLayer2: 'var(--dsw-alias-bg-layer-2, rgba(127,127,127,0.10))',
+			bgOverlay: 'var(--dsw-alias-bg-overlay, rgba(127,127,127,0.16))',
+			shadow: '0 10px 30px rgba(0,0,0,0.22)',
 			borderL1: 'var(--dsw-alias-border-l1, rgba(127,127,127,0.20))',
 			borderL2: 'var(--dsw-alias-border-l2, rgba(127,127,127,0.32))',
 			brand: 'var(--dsw-alias-brand-primary, #4d6bfe)',
@@ -572,6 +578,15 @@ window.__ModuleLoader__.load({
 
 		function BackIcon(props) {
 			return svg(props.size, null, [h('path', { key: 'a', d: 'm14 6-6 6 6 6' })]);
+		}
+
+		/** An outline: one short bar per heading level. */
+		function OutlineIcon(props) {
+			return svg(props.size, null, [
+				h('path', { key: 'a', d: 'M4 6h16' }),
+				h('path', { key: 'b', d: 'M8 12h12' }),
+				h('path', { key: 'c', d: 'M11 18h9' }),
+			]);
 		}
 
 		// ── markdown-lite ────────────────────────────────────────────────────
@@ -737,8 +752,15 @@ window.__ModuleLoader__.load({
 			return /^\s*\|?[\s:|-]*-[\s:|-]*\|?\s*$/.test(text);
 		}
 
-		/** Block-level markdown, capped by the caller's line budget. */
-		function renderMarkdown(text, onLink) {
+		/**
+		 * Block-level markdown, capped by the caller's line budget.
+		 * @param text - the note's source.
+		 * @param onLink - navigator for `[[wikilinks]]`.
+		 * @param idPrefix - anchor prefix for headings. Every heading carries its anchor
+		 *   and its depth as DOM attributes, so the outline panel reads what was
+		 *   actually rendered instead of parsing the note a second time.
+		 */
+		function renderMarkdown(text, onLink, idPrefix) {
 			let lines = String(text).split(/\r?\n/);
 			// Drop YAML frontmatter: it is metadata, not prose.
 			if (lines[0] === '---') {
@@ -750,6 +772,8 @@ window.__ModuleLoader__.load({
 			const blocks = [];
 			let i = 0;
 			let key = 0;
+			let headingIndex = 0;
+			const anchors = idPrefix || OUTLINE_ID_PREFIX;
 
 			/** A table starts when a row is immediately followed by its divider. */
 			const tableStartsAt = (index) => lines[index].indexOf('|') >= 0
@@ -825,8 +849,12 @@ window.__ModuleLoader__.load({
 				if (heading) {
 					const level = heading[1].length;
 					const spec = READ.heading[level];
+					headingIndex += 1;
 					blocks.push(h('div', {
 						key: 'b' + (key += 1),
+						// What the outline anchors to and how deep it indents.
+						id: anchors + headingIndex,
+						'data-outline': level,
 						style: {
 							fontSize: spec.size,
 							fontWeight: spec.weight,
@@ -834,6 +862,8 @@ window.__ModuleLoader__.load({
 							// No bottom margin: the following block's own top margin is the
 							// space, exactly as Obsidian's `--heading-spacing` works.
 							margin: READ.headingTop + ' 0 0',
+							// Leave breathing room above the heading when the outline jumps here.
+							scrollMarginTop: 14,
 						},
 					}, renderInline(heading[2], 'h' + key, onLink)));
 					i += 1;
@@ -968,6 +998,42 @@ window.__ModuleLoader__.load({
 				props.icon ? h(props.icon, { key: 'i', size: props.iconSize || 13 }) : null,
 				props.text ? h('span', { key: 't' }, props.text) : null,
 			]);
+		}
+
+		/**
+		 * One row of the outline: a heading's text, indented by its depth.
+		 * @param props - `text`, `level`, `active`, `onClick`.
+		 */
+		function OutlineRow(props) {
+			const [hovered, hover] = useHover();
+			return h('button', {
+				type: 'button',
+				title: props.text,
+				'aria-current': props.active === true ? 'true' : undefined,
+				onClick: props.onClick,
+				style: {
+					display: 'block',
+					width: '100%',
+					boxSizing: 'border-box',
+					textAlign: 'left',
+					border: 'none',
+					borderRadius: 5,
+					background: props.active === true || hovered ? T.hover : 'transparent',
+					color: props.active === true ? T.brand : 'inherit',
+					font: 'inherit',
+					fontSize: 12,
+					lineHeight: 1.35,
+					fontWeight: props.level <= 1 ? 600 : 400,
+					opacity: props.level >= 5 ? 0.85 : 1,
+					cursor: 'pointer',
+					padding: '4px 7px',
+					paddingLeft: 7 + (props.level - 1) * 11,
+					overflow: 'hidden',
+					textOverflow: 'ellipsis',
+					whiteSpace: 'nowrap',
+				},
+				...hover,
+			}, props.text);
 		}
 
 		// ── tree ─────────────────────────────────────────────────────────────
@@ -1729,6 +1795,18 @@ window.__ModuleLoader__.load({
 				// note the reader is actually looking at.
 				const loadSeq = React.useRef(0);
 
+				// ── the outline ──────────────────────────────────────────────
+				//
+				// One view over what is already on screen. Every rendered heading carries
+				// its anchor and its depth as DOM attributes, so this list is read back
+				// off the page itself instead of parsing the note a second time and
+				// drifting from what the reader is looking at.
+				const bodyRef = React.useRef(null);
+				const [outlineOpen, setOutlineOpen] = React.useState(false);
+				const [outlineItems, setOutlineItems] = React.useState([]);
+				const [activeHeading, setActiveHeading] = React.useState('');
+				const outlineAnchors = React.useMemo(() => OUTLINE_ID_PREFIX + (notePageSeq += 1) + '-', []);
+
 				const load = React.useCallback((target) => {
 					const seq = (loadSeq.current += 1);
 					setLoading(true);
@@ -1832,9 +1910,74 @@ window.__ModuleLoader__.load({
 				// expensive thing here. Only the note (or the link navigator) can change
 				// what the Markdown becomes.
 				const renderedMarkdown = React.useMemo(
-					() => (note === null ? null : renderMarkdown(note.text, navigate)),
-					[note, navigate],
+					() => (note === null ? null : renderMarkdown(note.text, navigate, outlineAnchors)),
+					[note, navigate, outlineAnchors],
 				);
+
+				/** The headings currently on screen, in document order. */
+				const collectOutline = React.useCallback(() => {
+					const host = bodyRef.current;
+					if (host === null) return [];
+					const nodes = host.querySelectorAll('[data-outline]');
+					const items = [];
+					for (let index = 0; index < nodes.length; index += 1) {
+						const node = nodes[index];
+						items.push({
+							id: node.id,
+							level: Number(node.getAttribute('data-outline')) || 1,
+							text: String(node.textContent || '').replace(/\s+/g, ' ').trim(),
+						});
+					}
+					return items;
+				}, []);
+
+				/** Bring one heading to the top of the reading area. */
+				const jumpToHeading = React.useCallback((id) => {
+					const host = bodyRef.current;
+					if (host === null || id === '') return;
+					const target = host.querySelector('[id="' + id + '"]');
+					if (target === null) return;
+					setActiveHeading(id);
+					if (typeof target.scrollIntoView === 'function') {
+						try {
+							target.scrollIntoView({ block: 'start', behavior: 'smooth' });
+						} catch (error) {
+							target.scrollIntoView();
+						}
+						return;
+					}
+					// A shell without `scrollIntoView`: move the reading area by hand.
+					host.scrollTop += target.getBoundingClientRect().top - host.getBoundingClientRect().top - 14;
+				}, []);
+
+				/** Which heading the reader is inside, according to the reading area. */
+				const trackHeading = React.useCallback(() => {
+					if (!outlineOpen) return;
+					const host = bodyRef.current;
+					if (host === null) return;
+					const nodes = host.querySelectorAll('[data-outline]');
+					if (nodes.length === 0) return;
+					const limit = host.getBoundingClientRect().top + 30;
+					let current = nodes[0].id;
+					for (let index = 0; index < nodes.length; index += 1) {
+						if (nodes[index].getBoundingClientRect().top <= limit) current = nodes[index].id;
+						else break;
+					}
+					setActiveHeading(current);
+				}, [outlineOpen]);
+
+				// The rendered page is the source of truth: rebuild whenever it changes, and
+				// pick the heading the reader is at the moment the panel opens.
+				React.useEffect(() => {
+					if (!outlineOpen) return;
+					setOutlineItems(collectOutline());
+					trackHeading();
+				}, [outlineOpen, renderedMarkdown, collectOutline, trackHeading]);
+
+				// Editing swaps the rendered page for a textarea: nothing left to outline.
+				React.useEffect(() => {
+					if (editing) setOutlineOpen(false);
+				}, [editing]);
 
 				const body = error !== ''
 					? h('div', { style: { padding: 16, color: T.error, fontSize: 12.5 } }, error)
@@ -1913,6 +2056,13 @@ window.__ModuleLoader__.load({
 					]
 					: [
 						h(IconButton, {
+							key: 'outline',
+							title: outlineOpen ? '收起大纲' : '大纲：点标题直接跳过去',
+							text: '大纲',
+							icon: OutlineIcon,
+							onClick: () => setOutlineOpen((open) => !open),
+						}),
+						h(IconButton, {
 							key: 'edit',
 							title: '直接编辑这篇笔记的 Markdown',
 							text: '编辑',
@@ -1944,6 +2094,7 @@ window.__ModuleLoader__.load({
 				return h('div', {
 					ref: noteRef,
 					style: {
+						position: 'relative',
 						flex: '1 1 auto',
 						minHeight: 0,
 						display: 'flex',
@@ -1983,6 +2134,8 @@ window.__ModuleLoader__.load({
 					]),
 					h('div', {
 						key: 'body',
+						ref: bodyRef,
+						onScroll: trackHeading,
 						style: {
 							flex: '1 1 auto',
 							minHeight: 0,
@@ -1991,6 +2144,72 @@ window.__ModuleLoader__.load({
 							overflowY: editing ? 'hidden' : 'auto',
 						},
 					}, body),
+					outlineOpen ? h('div', {
+						key: 'outline',
+						style: {
+							position: 'absolute',
+							top: 40,
+							right: 8,
+							width: 216,
+							maxHeight: 'calc(100% - 96px)',
+							display: 'flex',
+							flexDirection: 'column',
+							background: T.bgOverlay,
+							border: '1px solid ' + T.borderL2,
+							borderRadius: 8,
+							boxShadow: T.shadow,
+							zIndex: 6,
+							overflow: 'hidden',
+						},
+					}, [
+						h('div', {
+							key: 'head',
+							style: {
+								display: 'flex',
+								alignItems: 'center',
+								gap: 6,
+								padding: '6px 7px 6px 10px',
+								borderBottom: '1px solid ' + T.borderL1,
+								fontSize: 11.5,
+								color: T.labelSecondary,
+							},
+						}, [
+							h('span', { key: 't', style: { flex: 1 } }, outlineItems.length === 0
+								? '大纲'
+								: '大纲 · ' + outlineItems.length + ' 个标题'),
+							h('button', {
+								key: 'x',
+								type: 'button',
+								title: '收起大纲',
+								'aria-label': '收起大纲',
+								onClick: () => setOutlineOpen(false),
+								style: {
+									border: 'none',
+									background: 'transparent',
+									color: 'inherit',
+									font: 'inherit',
+									fontSize: 14,
+									lineHeight: 1,
+									padding: '0 2px',
+									cursor: 'pointer',
+								},
+							}, '×'),
+						]),
+						h('div', {
+							key: 'list',
+							style: { overflowY: 'auto', padding: '5px 5px 7px' },
+						}, outlineItems.length === 0
+							? h('div', {
+								style: { padding: '8px 6px 6px', fontSize: 11.5, color: T.labelSecondary },
+							}, editing ? '编辑状态下没有大纲' : '这篇笔记没有标题')
+							: outlineItems.map((item) => h(OutlineRow, {
+								key: item.id,
+								text: item.text === '' ? '(无标题)' : item.text,
+								level: item.level,
+								active: activeHeading === item.id,
+								onClick: () => jumpToHeading(item.id),
+							}))),
+					]) : null,
 					// Reading a note and talking about it are the same act, so the
 					// conversation is here too — the same Session as the 知识库 panel's.
 					h(VaultChatDock, {

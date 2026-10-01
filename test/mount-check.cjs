@@ -99,6 +99,13 @@ const TREE = {
 }
 const NOTE = '---\ntags: [demo]\n---\n# 标题\n\n正文 **加粗** 与 [[双向链接|别名]]。\n\n- 一\n- 二\n'
 
+// A note whose heading ladder exercises the outline: three depths, and a second
+// heading at a level that has already been used, so the list cannot pass by
+// rendering a straight line.
+const OUTLINE_NOTE_PATH = '大纲.md'
+const OUTLINE_NOTE = '# 一级\n\n段落\n\n## 二级甲\n\n文字\n\n### 三级\n\n文字\n\n## 二级乙\n\n文字\n'
+const OUTLINE_TEXTS = ['一级', '二级甲', '三级', '二级乙']
+
 const requests = []
 const posts = []
 // The vault folder the reader has agreed to. `null` is the first-run state: the
@@ -152,7 +159,9 @@ global.fetch = (url, options) => {
     body = { vault: '知识库', root: 'D:\\知识库', path: query, truncated: treeTruncated, entries: TREE[query] ?? [] }
   } else if (target.startsWith('/dsh-obsidian/note')) {
     const query = target.indexOf('?path=') >= 0 ? decodeURIComponent(target.slice(target.indexOf('?path=') + 6)) : ''
-    const text = query === SLOW_NOTE_PATH ? SLOW_NOTE_TEXT : (query === FAST_NOTE_PATH ? FAST_NOTE_TEXT : NOTE)
+    const text = query === SLOW_NOTE_PATH ? SLOW_NOTE_TEXT
+      : (query === FAST_NOTE_PATH ? FAST_NOTE_TEXT
+        : (query === OUTLINE_NOTE_PATH ? OUTLINE_NOTE : NOTE))
     body = { root: 'D:\\知识库', path: query, size: text.length, mtimeMs: Date.now(), truncated: false, text }
     // The stale answer is held until the harness releases it.
     if (query === deferNotePath && deferNotePath !== '') {
@@ -495,6 +504,64 @@ step('the note page renders the note and resolves its wikilinks', async () => {
   }
 
   noteRoot.unmount()
+  container.remove()
+})
+
+step('the note page outlines its headings and jumps to the one you pick', async () => {
+  const noteBody = registered.find((entry) => entry.metadata.key === api.__internals.NOTE_TAB_ID)
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const outlineRoot = ReactDOMClient.createRoot(container)
+  outlineRoot.render(React.createElement(noteBody.component, {
+    useTabInfo: () => ({ tab: { contentId: api.__internals.noteAddress(OUTLINE_NOTE_PATH) } }),
+    inputActions: seatProps.inputActions,
+  }))
+  await flush()
+
+  // Every rendered heading carries the anchor the outline scrolls to and its depth.
+  const headings = [...container.querySelectorAll('[data-outline]')]
+  const depths = headings.map((node) => node.getAttribute('data-outline')).join(',')
+  if (headings.length !== 4 || depths !== '1,2,3,2') {
+    throw new Error('heading anchors carry the wrong depth: ' + headings.length + ' -> ' + depths)
+  }
+  if (headings.some((node) => node.id === '')) throw new Error('a heading has no anchor id')
+
+  // jsdom does not implement scrollIntoView; stand in for it and record the call.
+  const scrolled = []
+  window.Element.prototype.scrollIntoView = function scrollIntoView(options) {
+    scrolled.push({ node: this, options })
+  }
+
+  const outlineButton = [...container.querySelectorAll('button')]
+    .find((button) => (button.textContent || '').trim() === '大纲')
+  if (outlineButton === undefined) throw new Error('the note page has no outline control')
+  outlineButton.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  await flush()
+
+  const rows = [...container.querySelectorAll('button')]
+    .filter((button) => OUTLINE_TEXTS.includes((button.textContent || '').trim()))
+  if (rows.length !== 4) throw new Error('the outline listed ' + rows.length + ' of 4 headings')
+  // Depth is shown as indentation, or a nested heading is indistinguishable.
+  const pads = rows.map((row) => parseFloat(row.style.paddingLeft))
+  if (!(pads[0] < pads[1] && pads[1] < pads[2])) {
+    throw new Error('the outline does not indent by depth: ' + pads.join(' / '))
+  }
+
+  rows[2].dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  await flush()
+  if (scrolled.length !== 1) throw new Error('picking a heading scrolled ' + scrolled.length + ' time(s)')
+  if (scrolled[0].node !== headings[2]) throw new Error('the outline jumped to the wrong heading')
+
+  // The same control puts the panel away again.
+  outlineButton.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  await flush()
+  const stillListed = [...container.querySelectorAll('button')]
+    .some((button) => OUTLINE_TEXTS.includes((button.textContent || '').trim()))
+  if (stillListed) throw new Error('the outline stayed open after toggling it off')
+
+  // Entering edit mode swaps the rendered page for a textarea: no stale outline.
+  delete window.Element.prototype.scrollIntoView
+  outlineRoot.unmount()
   container.remove()
 })
 

@@ -45,6 +45,7 @@ vault; the conversation Session id is DSH's own bookkeeping and lives under
 | Conversation box | Client slot | a child of the panel body, rendered into `dsh-obsidian/panel.conversation` |
 | Conversation seat occupant | Client slot | `dsh-obsidian/panel.conversation`, and `dsh-obsidian/note.conversation` on the note page |
 | Note page body | Client slot | `sidebar.right.pane.tab`, keyed `dsh-obsidian/note` — also declares its own conversation child |
+| Note outline | Client UI | the note page's `大纲` panel, anchored to the `dsh-obsidian-outline-*` ids `renderMarkdown` puts on headings |
 | Launcher row | Client slot | `sidebar.footer.action` (id `dsh-obsidian`) |
 | Tab types | Client service | `sidebarRightTabs.register({ id, kind, patterns, canOpen, title })` |
 | `GET /dsh-obsidian/status` | Host route | what the plugin resolved (app, vault, config) |
@@ -143,6 +144,25 @@ page stop looking like Obsidian.
 
 A GFM table renders as a table. Before that it rendered as a paragraph of pipes,
 which is most of what a note with a table looked like.
+
+**The outline.** `大纲` in the note's header opens a floating list of its headings
+down the right edge of the pane: clicking one scrolls the reading area to it, and
+the row for the heading you are currently inside is the one marked. Depth is
+indentation, so a `###` under a `##` reads as nested.
+
+It is deliberately a *view over the rendered page*, not a second parse of the note.
+`renderMarkdown` writes each heading's anchor (`id`) and its depth (`data-outline`)
+as DOM attributes while it renders, and the panel reads them back with
+`querySelectorAll` — one parse, so the list can never describe a page other than the
+one on screen. That includes the capped case: a note longer than `MAX_RENDER_LINES`
+renders only its head, and the outline lists exactly the headings that exist, with
+nothing trailing off the end pointing at a heading that was never drawn. Anchors are
+numbered per page, so two note tabs open at once cannot collide.
+
+The panel closes with its own control, with the `×`, and on entering edit mode — the
+rendered page is gone, so there is nothing left to outline. `mount-check` drives
+open → pick → jump → close against a note whose heading ladder is one/two/three/two,
+and asserts the anchors, the indentation and the scroll target.
 
 **Editing.** `编辑` swaps the rendered view for a plain-text editor over the same
 file; `保存` posts the whole text to `/dsh-obsidian/note`. A note whose read was
@@ -402,8 +422,9 @@ hostage to a directory that has nothing to do with this plugin — and which was
 then deleted out from under them.
 
 `mount-check.cjs` exists because server rendering is not enough. It walks the
-panel through mount → tree → expand → note → back → search → the conversation box
-→ launcher with effects actually running. The first version of this plugin used a
+panel through mount → tree → expand → note → outline → back → search → the
+conversation box → launcher with effects actually running. The first version of
+this plugin used a
 `const` above its own declaration: the throw happened inside a passive mount
 effect, which SSR never executes, and the slot framework's entry boundary
 responded by **retiring the tab body** — so the right Sidebar came up blank with

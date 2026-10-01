@@ -24,6 +24,7 @@ Obsidian 的注册表只是一个**猜测**,不是答案。第一次运行时,�
 | 对话框 | 客户端 slot | 面板主体的子节点,渲染进 `dsh-obsidian/panel.conversation` |
 | 对话座位的占用者 | 客户端 slot | `dsh-obsidian/panel.conversation`,笔记页上则是 `dsh-obsidian/note.conversation` |
 | 笔记页主体 | 客户端 slot | `sidebar.right.pane.tab`,key 为 `dsh-obsidian/note` —— 同时声明它自己的对话子节点 |
+| 笔记大纲 | 客户端 UI | 笔记页的 `大纲` 面板,锚点是 `renderMarkdown` 写在标题上的 `dsh-obsidian-outline-*` id |
 | 启动行 | 客户端 slot | `sidebar.footer.action`(id `dsh-obsidian`) |
 | 标签页类型 | 客户端服务 | `sidebarRightTabs.register({ id, kind, patterns, canOpen, title })` |
 | `GET /dsh-obsidian/status` | 宿主路由 | 插件解析出的结果(app、知识库、配置) |
@@ -74,6 +75,12 @@ ctx.slots.register({ name: 'sidebar.chat.conversation' }, VaultConversation)
 **排版是 Obsidian 的,照抄过来的。** `READ` 里的数字就是默认主题阅读视图自己的值 —— 16px、行高 1.5;标题阶梯(`1.618em`/`1.462em`/`1.318em`/`1.188em`/`1.076em`/`1em`)及其字重(h1 为 700,其余为 600)与行高;块与块之间 `1rem`;标题紧跟在另一个块之后时上方 `2.5rem`;列表缩进 `2.25em`;引用块有 `2px` 的强调竖线和 `24px` 内边距;代码块不加装饰。`render-check` 把其中好几项钉住了,因为正是这里的漂移让页面不再像 Obsidian。
 
 GFM 表格会渲染成表格。在这之前,它渲染成一段由竖线组成的段落,而一篇带表格的笔记大部分时间看起来就是这样。
+
+**大纲。** 笔记标题栏里的 `大纲` 会在窗格右缘浮出一个标题清单:点其中一条,阅读区就滚到那个标题;你当前正在读的标题那一行会被标出来。层级用缩进表示,所以 `##` 下面的 `###` 一眼就能看出是嵌套的。
+
+它刻意只是**对已渲染页面的一层视图**,而不是把笔记再解析一遍。`renderMarkdown` 在渲染时就把每个标题的锚点(`id`)和层级(`data-outline`)写成 DOM 属性,面板再用 `querySelectorAll` 读回来 —— 只解析一次,清单就不可能描述出与屏幕上不同的另一页。这也包括被截断的情况:超过 `MAX_RENDER_LINES` 的笔记只渲染开头,大纲列出的正是真实存在的那些标题,不会出现指向根本没画出来的标题的条目。锚点按页面实例编号,同时开两个笔记页也不会撞。
+
+面板可以用它自己的控件、`×`,或进入编辑模式来收起 —— 渲染出来的页面已经没了,也就没什么可大纲的了。`mount-check` 用一篇标题阶梯为 一/二/三/二 的笔记跑完 打开 → 选择 → 跳转 → 收起,并断言锚点、缩进和滚动目标。
 
 **编辑。** `编辑` 把渲染视图换成同一文件的纯文本编辑器;`保存` 把整段文本 POST 到 `/dsh-obsidian/note`。读取时被截断的笔记会直接被拒绝编辑 —— 局部视图不是覆盖该文件的安全基础。
 
@@ -201,7 +208,7 @@ node test/host-check.mjs     # drives every route against the real vault
 
 两个客户端 harness 从**这个包自己的** `devDependencies` 解析 `react`、`react-dom` 和 `jsdom`,React 钉在 shell 打包的那个 `18.2.0` 上。它们以前是从 DSH 源码检出里借这些依赖的,这让它们被一个和本插件毫无关系的目录挟持 —— 而那个目录后来还被删了,直接从它们脚下抽走。
 
-`mount-check.cjs` 之所以存在,是因为服务端渲染不够。它带着面板走一遍 挂载 → 目录树 → 展开 → 笔记 → 返回 → 搜索 → 对话框 → 启动行,而且 effect 是真的在跑。这个插件的第一个版本在自己声明之前用了 `const`:抛错发生在 passive mount effect 里,而 SSR 从不执行它,slot 框架的条目边界则以**把这个标签页主体 retire 掉**作为回应 —— 于是右侧栏打开是空的,产品里没有任何东西指向原因。这一类 bug 只有真实挂载才看得见。
+`mount-check.cjs` 之所以存在,是因为服务端渲染不够。它带着面板走一遍 挂载 → 目录树 → 展开 → 笔记 → 大纲 → 返回 → 搜索 → 对话框 → 启动行,而且 effect 是真的在跑。这个插件的第一个版本在自己声明之前用了 `const`:抛错发生在 passive mount effect 里,而 SSR 从不执行它,slot 框架的条目边界则以**把这个标签页主体 retire 掉**作为回应 —— 于是右侧栏打开是空的,产品里没有任何东西指向原因。这一类 bug 只有真实挂载才看得见。
 
 它也是用回归测试抓住那两个流到用户手上的缺陷的地方:这个框在**每一次**渲染时都 retain 它的 Session(resolver 每次都是新标识,于是 acquire effect 在循环里重跑),以及抑制 Hero 之后随之而来的那些阶段期望。
 
