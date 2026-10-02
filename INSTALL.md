@@ -7,16 +7,15 @@ directly, so copying the folder over is enough.
 
 ## 1. Get the code
 
-Two ways. **From npm** is one line in a profile (below). **From this repository**,
-clone or download it and keep the folder somewhere stable, for example:
+Clone or download this repository and keep the folder somewhere stable, for example:
 
 - Windows: `D:\skill\dsh-obsidian`
 - macOS / Linux: `~/dsh-obsidian`
 
-The folder name does not matter — the plugin's identity comes from `package.json`,
-whose package name is **`dsh-obsidian-panel`** (the project is `dsh-obsidian`; see the
-naming note in the README). **Avoid non-ASCII characters and spaces in the path** if you
-can — that skips a whole class of trouble.
+The folder name does not matter — the plugin's identity comes from `package.json`, whose
+package name is **`dsh-obsidian-panel`** (the project is `dsh-obsidian`, and it is **not on
+npm**; see the naming note in the README). **Avoid non-ASCII characters and spaces in the
+path** if you can — that skips a whole class of trouble.
 
 ## 2. Hook it into a DSH profile
 
@@ -26,13 +25,7 @@ A DSH plugin hangs off a **profile**; dropping it into a directory is not enough
 ~/.dsh/profiles/<your profile>/package.json
 ```
 
-**a)** Add a line to `dependencies` — from the registry:
-
-```json
-"dsh-obsidian-panel": "^1.1.0"
-```
-
-or from a folder you cloned (with **your own** path):
+**a)** Add a line to `dependencies` (with **your own** path):
 
 ```json
 "dsh-obsidian-panel": "link:D:/skill/dsh-obsidian"
@@ -52,7 +45,7 @@ pnpm install
 ```
 
 > Alternatively, let the AI inside DSH do it: tell it "use `plugin_manager` to install
-> `dsh-obsidian-panel`" (or `link:<your path>`) as a bundle.
+> `link:<your path>` as a bundle".
 > Install logs are under `~/.dsh/profiles/<profile>/.plugin-manager/logs/`.
 
 ## 3. Restart DSH

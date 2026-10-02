@@ -6,15 +6,14 @@
 
 ## 1. 拿到代码
 
-两种方式:**从 npm 装**(就是 profile 里加一行,见下),或者**从本仓库**clone/下载,
-把整个文件夹放到一个固定的位置,例如:
+从本仓库 clone 或下载,把整个文件夹放到一个固定的位置,例如:
 
 - Windows:`D:\skill\dsh-obsidian`
 - macOS / Linux:`~/dsh-obsidian`
 
 文件夹叫什么无所谓 —— 插件的身份来自 `package.json`,而它的**包名是 `dsh-obsidian-panel`**
-(项目本身叫 `dsh-obsidian`,原因见 README 里的命名说明)。路径里**尽量避免中文和空格**,
-能省掉一类麻烦。
+(项目本身叫 `dsh-obsidian`,**没有发布到 npm**,原因见 README 里的命名说明)。路径里
+**尽量避免中文和空格**,能省掉一类麻烦。
 
 ## 2. 挂进 DSH 的 profile
 
@@ -24,13 +23,7 @@ DSH 的插件挂在某个 **profile** 下,不是丢进目录就生效。编辑:
 ~/.dsh/profiles/<你的 profile>/package.json
 ```
 
-**a)** 在 `dependencies` 里加一行 —— 从 registry 装:
-
-```json
-"dsh-obsidian-panel": "^1.1.0"
-```
-
-或者用你 clone 下来的文件夹(路径换成**你自己的**):
+**a)** 在 `dependencies` 里加一行(路径换成**你自己的**):
 
 ```json
 "dsh-obsidian-panel": "link:D:/skill/dsh-obsidian"
@@ -48,8 +41,7 @@ DSH 的插件挂在某个 **profile** 下,不是丢进目录就生效。编辑:
 pnpm install
 ```
 
-> 也可以直接让 DSH 里的 AI 代劳:告诉它「用 `plugin_manager` 把 `dsh-obsidian-panel`
-> (或 `link:<你的路径>`)装成 bundle」。
+> 也可以直接让 DSH 里的 AI 代劳:告诉它「用 `plugin_manager` 把 `link:<你的路径>` 装成 bundle」。
 > 安装日志在 `~/.dsh/profiles/<profile>/.plugin-manager/logs/`。
 
 ## 3. 重启 DSH

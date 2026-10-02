@@ -3,23 +3,24 @@
 # dsh-obsidian
 
 [![CI](https://github.com/DedsecLemon/dsh-obsidian/actions/workflows/ci.yml/badge.svg)](https://github.com/DedsecLemon/dsh-obsidian/actions/workflows/ci.yml)
-[![npm](https://img.shields.io/npm/v/dsh-obsidian-panel.svg)](https://www.npmjs.com/package/dsh-obsidian-panel)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 把 Obsidian 知识库放进 DSH 右侧栏。**安装步骤见 [INSTALL.zh-CN.md](INSTALL.zh-CN.md)。**
 不需要构建 —— `index.mjs` 和 `client.js` 就是直接运行的源码。
 
 ```sh
-# 写在 ~/.dsh/profiles/<你的 profile>/package.json 里
-"dsh-obsidian-panel": "^1.1.0"     # dependencies
-"bundles": ["dsh-obsidian-panel"]  # dsh.profile.bundles
+git clone https://github.com/DedsecLemon/dsh-obsidian.git D:/skill/dsh-obsidian
+# 然后写在 ~/.dsh/profiles/<你的 profile>/package.json 里
+"dsh-obsidian-panel": "link:D:/skill/dsh-obsidian"   # dependencies
+"bundles": ["dsh-obsidian-panel"]                    # dsh.profile.bundles
 ```
 
 ## 命名
 
-项目叫 **dsh-obsidian**,发布到 npm 的包名是 **`dsh-obsidian-panel`**。必须如此:npm 上的
-`dsh-obsidian` 属于[另一个作者的 DSH + Obsidian 插件](https://www.npmjs.com/package/dsh-obsidian),
-既发不上去,装上也会变成那个。插件运行期的身份不受影响:路由是 `/dsh-obsidian/*`,
+项目叫 **dsh-obsidian**,**包名是 `dsh-obsidian-panel`,并且没有发布到 npm** —— 从本仓库安装即可。
+这个名字没得选:npm 上的 `dsh-obsidian` 属于
+[另一个作者的 DSH + Obsidian 插件](https://www.npmjs.com/package/dsh-obsidian),
+用那个名字既发不上去,装下来也会变成它。插件运行期的身份不受影响:路由是 `/dsh-obsidian/*`,
 slot 键是 `dsh-obsidian/*`,界面上的名字是 `知识库`。
 
 ## 哪个文件夹才是知识库
