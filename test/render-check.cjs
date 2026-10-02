@@ -149,10 +149,10 @@ for (const required of ['slots', 'sidebarRightTabs', 'sidebarRight']) {
   if (!api.inject.includes(required)) throw new Error('the plugin no longer requires ' + required)
 }
 
-// ── one tab type, and its body ─────────────────────────────────────────────
-// The conversation no longer gets a tab of its own: it is a box at the foot of
-// the knowledge base panel. A NOTE, however, does get a page of its own — so the
-// registered types are the panel and the note page.
+// ── two tab types, and their bodies ────────────────────────────────────────
+// The tree and a note. The conversation is not a tab any more: the SHELL shows it in
+// the centre, through `uiWorkspace.openSession`, so this plugin registers no
+// conversation surface and no seat at all.
 if (tabTypes.length !== 2) throw new Error('expected two tab types, got ' + tabTypes.length)
 const tabType = tabTypes.find((entry) => entry.kind === api.__internals.TAB_KIND)
 const noteType = tabTypes.find((entry) => entry.kind === api.__internals.NOTE_TAB_KIND)
@@ -193,59 +193,41 @@ const bodyMeta = registered.find((entry) => entry.metadata.key === tabType.id).m
 if (bodyMeta.key !== tabType.id) {
   throw new Error(`body seat key (${String(bodyMeta.key)}) must equal the tab type id (${String(tabType.id)})`)
 }
-// Declaring a session-scoped child is what hands a body the renderSlot AND
-// SessionProvider a conversation needs. Each surface declares its OWN seat.
-if (bodyMeta.children === undefined || bodyMeta.children[api.__internals.PANEL_CHAT_SLOT] === undefined) {
-  throw new Error('the notes panel does not declare its own conversation seat')
-}
-// It must NEVER declare the shell's seat. ui-subagent declares
-// `sidebar.chat.conversation` when it is loaded, and a second declaration throws —
-// which cost this panel its body entirely: opening the tab answered "nothing can
-// view this". A plugin may only declare slots it owns.
+// No surface of this plugin hosts a conversation any more, so NONE of them declares a
+// child slot. That is the whole point of opening the vault Session through the shell:
+// there is no seat of ours to collide with ui-subagent's, and none to keep fed.
 for (const entry of registered) {
   if (entry.metadata.children === undefined) continue
   for (const childKey of Object.keys(entry.metadata.children)) {
     if (childKey === 'sidebar.chat.conversation') {
       throw new Error('the plugin declares the shell-owned sidebar.chat.conversation slot')
     }
-    if (!childKey.startsWith('dsh-obsidian/')) {
-      throw new Error('the plugin declares a slot it does not own: ' + childKey)
-    }
+    throw new Error('the plugin declares a slot it does not own: ' + childKey)
   }
 }
 // Prove the duplicate rule is live, because a silent guard is worse than none: a
 // second declaration throws inside `apply`, and the shell then rolls back every
-// registration the plugin made. That is the outage this harness failed to catch.
+// registration the plugin made. That is the outage this harness once failed to catch.
+// The probe declares its OWN key first, then repeats it — the harness enforces the same
+// rule the shell does, and this asserts the mirror is still armed.
+ctx.slots.register({
+  name: 'sidebar.right.pane.tab',
+  key: 'duplicate-declaration-probe',
+  children: { 'dsh-obsidian/probe.conversation': { kind: 'single', scope: 'session' } },
+}, () => null)
 let duplicateRejected = false
 try {
   ctx.slots.register({
     name: 'sidebar.right.pane.tab',
-    key: 'duplicate-declaration-probe',
-    children: { 'dsh-obsidian/panel.conversation': { kind: 'single', scope: 'session' } },
+    key: 'duplicate-declaration-probe-2',
+    children: { 'dsh-obsidian/probe.conversation': { kind: 'single', scope: 'session' } },
   }, () => null)
 } catch (error) {
   duplicateRejected = /already declared/.test(String(error && error.message))
 }
 if (!duplicateRejected) throw new Error('a second declaration of a seat is not rejected')
-if (registered.some((entry) => entry.metadata.key === 'duplicate-declaration-probe')) {
+if (registered.some((entry) => entry.metadata.key === 'duplicate-declaration-probe-2')) {
   throw new Error('the refused declaration was still recorded')
-}
-// So the note page declares its OWN seat instead — a different name, which is why
-// it does not collide, and which is also what EARNS it the renderSlot and
-// SessionProvider a conversation needs.
-const noteBodyMeta = registered.find((entry) => entry.metadata.key === api.__internals.NOTE_TAB_ID).metadata
-if (noteBodyMeta.children === undefined || noteBodyMeta.children[api.__internals.NOTE_CHAT_SLOT] === undefined) {
-  throw new Error('the note page does not declare its own conversation seat')
-}
-if (noteBodyMeta.children['sidebar.chat.conversation'] !== undefined) {
-  throw new Error('the note page re-declares the shell seat, which throws inside apply')
-}
-// Both of OUR seats need an occupant, or a box renders a fallback instead of a
-// conversation. The shell's seat is deliberately not ours: ui-subagent occupies it.
-for (const seatName of [api.__internals.PANEL_CHAT_SLOT, api.__internals.NOTE_CHAT_SLOT]) {
-  const occupant = registered.find((entry) => entry.metadata.name === seatName)
-  if (occupant === undefined) throw new Error('no occupant is registered for ' + seatName)
-  if (typeof occupant.component !== 'function') throw new Error('the occupant of ' + seatName + ' is not a component')
 }
 
 // A registration that throws must cost only ITSELF. The shell rolls back every
@@ -276,16 +258,18 @@ for (const seatName of [api.__internals.PANEL_CHAT_SLOT, api.__internals.NOTE_CH
   if (!seen.includes('slot:sidebar.footer.action')) {
     throw new Error('a throwing registration erased the sidebar-foot row')
   }
-  if (!seen.includes('slot:dsh-obsidian/note.conversation')) {
-    throw new Error('a throwing registration erased the note page seat occupant')
+  // The note page comes AFTER the throwing body in registration order: guarding each
+  // registration is what keeps one hostile body from erasing the rest.
+  if (!seen.includes('slot:sidebar.right.pane.tab')) {
+    throw new Error('a throwing registration erased the note page')
   }
 }
 
 // ── a profile WITHOUT Sessions/Workspaces ──────────────────────────────────
-// The real reason they are out of `inject`. This context hands out neither, and
-// the plugin must still register the tree and its way in — only the conversation
-// box is absent. Before this, the entry simply did not activate, so this whole
-// branch ("对话坏了但目录树仍在") could never run.
+// The real reason they are out of `inject`. This context hands out neither, and the
+// plugin must still register the tree and its way in. The conversation needs them, and
+// it is now opened on demand — so a missing service costs a message when the reader
+// asks for it, not the tree, and not the plugin's activation.
 {
   const captured = []
   const bare = {
@@ -307,18 +291,15 @@ for (const seatName of [api.__internals.PANEL_CHAT_SLOT, api.__internals.NOTE_CH
   if (!captured.some((entry) => entry.metadata.key === api.__internals.NOTE_TAB_ID)) {
     throw new Error('the note page vanished when Sessions were missing')
   }
-  if (captured.some((entry) => entry.metadata.name === api.__internals.PANEL_CHAT_SLOT)) {
-    throw new Error('an occupant was registered for a seat the panel cannot fill')
-  }
   const markup = renderToStaticMarkup(React.createElement(panel.component, {
     renderSlot: () => null,
     SessionProvider: (props) => props.children,
     inputActions: { setDraft: () => {} },
   }))
   if (!markup.includes('搜索整个库')) throw new Error('the tree panel did not render without Sessions')
-  if (markup.includes('data-dsh-obsidian-chat-dock')) {
-    throw new Error('the conversation box rendered without Sessions to bind it')
-  }
+  // The way in must be there and must SAY so rather than doing nothing: the click runs
+  // `openVaultConversation`, which reports the missing navigation.
+  if (!markup.includes('对话')) throw new Error('the panel lost its way into the conversation')
 }
 for (const entry of registered) {
   if (typeof entry.component !== 'function') throw new Error('slot ' + entry.metadata.name + ' has no component')
@@ -355,13 +336,13 @@ if (!rendered.panel.includes('搜索整个库')) throw new Error('panel is missi
 if (rendered.panel.includes('渲染失败')) {
   throw new Error('the notes panel threw while rendering: ' + rendered.panel.slice(0, 240))
 } 
-// The conversation box must actually be part of the panel, at its foot — that is
-// the whole point of this layout.
-if (!rendered.panel.includes('data-dsh-obsidian-chat-dock')) {
-  throw new Error('the notes panel has no conversation dock')
+// The conversation is NOT in this panel's markup: the shell shows it in the centre,
+// so the only thing the tree panel owes the reader is the control that opens it.
+if (rendered.panel.includes('data-dsh-obsidian-chat-page') || rendered.panel.includes('data-dsh-obsidian-chat-dock')) {
+  throw new Error('a conversation rendered inside the tree panel')
 }
-if (!rendered.panel.includes('只服务这个知识库')) {
-  throw new Error('the conversation dock is missing its scope label')
+if (!rendered.panel.includes('对话')) {
+  throw new Error('the notes panel has no control for the conversation')
 }
 // Wide renders the visible label; the 56px rail keeps it to the icon, with the
 // text surviving only in the accessible name and tooltip.
@@ -374,71 +355,6 @@ if (!rendered.footerRail.includes('aria-label')) throw new Error('rail launcher 
 // A right-Sidebar pane is narrow: the panel must stack vertically, never
 // side-by-side columns.
 if (!rendered.panel.includes('flex-direction:column')) throw new Error('panel is not a vertical stack')
-
-// ── the conversation occurrence ────────────────────────────────────────────
-// Each of this plugin's surfaces declares its OWN seat and fills it. The shell's
-// `sidebar.chat.conversation` is NOT touched: it belongs to whichever sidebar-chat
-// tab declares it (ui-subagent here), and declaring it ourselves threw — the panel
-// lost its body and the tab answered "nothing can view this".
-const seatEntry = registered.find((entry) => entry.metadata.name === api.__internals.PANEL_CHAT_SLOT)
-if (seatEntry === undefined) throw new Error('nothing occupies dsh-obsidian/panel.conversation')
-if (typeof seatEntry.component !== 'function') throw new Error('the conversation occupant is not a component')
-
-const factoryCalls = []
-const sessionProps = {
-  sessionId: 'session-1',
-  useSession: (select) => select({ blank: false, awaitingFirstTurn: false, running: false, openState: 'open' }),
-  useConversation: (select) => select({ activeTargets: new Set(['chat']) }),
-  useSessions: (select) => select({ byId: { 'session-1': { blank: false } } }),
-  renderFactorySlot: (name, props, options) => {
-    factoryCalls.push({ name, props, options })
-    return React.createElement('div', null, 'FACTORY_CONTENT')
-  },
-}
-const seatMarkup = renderToStaticMarkup(React.createElement(seatEntry.component, sessionProps))
-if (factoryCalls.length !== 1) throw new Error('renderFactorySlot was called ' + factoryCalls.length + ' time(s)')
-if (factoryCalls[0].name !== 'conversation.content') {
-  throw new Error('the occupant rendered the wrong factory: ' + factoryCalls[0].name)
-}
-// `embedded` is what keeps the conversation in its Sidebar form rather than the
-// centre column's; the phase decides which empty state (or none) is shown.
-if (factoryCalls[0].props.variant !== 'embedded') throw new Error('the conversation was not rendered embedded')
-if (typeof factoryCalls[0].props.phase !== 'string') throw new Error('no phase was supplied')
-// Never the Hero: the Hero is the "start a new Session" screen with its workspace
-// picker, which is precisely what made the box read as a fresh conversation.
-if (factoryCalls[0].props.hero !== false) throw new Error('the conversation must never render the Hero')
-if (factoryCalls[0].props.phase === 'hero') throw new Error('the conversation must never use the hero phase')
-// The views override is what makes the factory render the Conversation body.
-if (typeof factoryCalls[0].options?.slots?.views !== 'function') {
-  throw new Error('the conversation views override is missing')
-}
-if (!seatMarkup.includes('FACTORY_CONTENT')) throw new Error('the factory output never reached the seat')
-
-// The views override must select the strict per-Session Conversation body.
-const viewRenders = []
-const view = api.__internals.FixedChatConversationView({
-  renderSlot: (name, props) => { viewRenders.push({ name, props }); return null },
-})
-if (viewRenders.length !== 1 || viewRenders[0].name !== 'conversation.session') {
-  throw new Error('the views override does not render conversation.session')
-}
-if (viewRenders[0].props.view !== 'chat') throw new Error('the Conversation body was not asked for the chat view')
-if (view !== null) throw new Error('the views override did not pass its render through')
-
-// An unfamiliar snapshot must degrade to a phase, never throw: a throw inside
-// the seat's boundary retires the tab body instead of showing it. The stubs CALL
-// the selector with a missing value — `useSessions: () => undefined` never ran the
-// selector at all, so the real throw path (`state.byId` on undefined) went untested.
-// Rendered as a real element — the occupant uses hooks, so it cannot be called as
-// a function.
-for (const broken of [
-  { sessionId: 'x', useSession: (select) => select(undefined), useConversation: (select) => select(undefined), useSessions: (select) => select(undefined), renderFactorySlot: () => null, inputActions: undefined },
-  { sessionId: 'x', useSession: (select) => select({}), useConversation: (select) => select({}), useSessions: (select) => select({}), renderFactorySlot: () => null, inputActions: undefined },
-  { sessionId: 'x', useSession: (select) => select({ subagent: {} }), useConversation: (select) => select({ activeTargets: null }), useSessions: (select) => select({}), renderFactorySlot: () => null, inputActions: undefined },
-]) {
-  const markup = renderToStaticMarkup(React.createElement(api.__internals.VaultConversation, broken))
-  if (markup !== '') throw new Error('a broken snapshot produced markup instead of degrading: ' + markup)
-}
 
 // ── the file-mention grammar (how a note is "dropped into" a conversation) ──
 const { fileMention, absoluteVaultPath, parseNoteAddress, noteAddress } = api.__internals

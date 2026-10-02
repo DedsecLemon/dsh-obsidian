@@ -47,110 +47,11 @@ window.__ModuleLoader__.load({
 
 		// ── the vault conversation ───────────────────────────────────────────
 		//
-		// One extra DSH Session that lives in the vault's own Workspace, shown in a
-		// box at the foot of the `知识库` panel. Nothing about the conversation is
-		// reimplemented: the shell's `sidebar.chat.conversation` seat renders the
-		// shared `conversation.content` factory for whatever Session we provide.
-
-		/**
-		 * The SHELL's conversation seat name.
-		 *
-		 * This plugin never declares or occupies it — ui-subagent owns it in this
-		 * profile, and a second declarer throws inside `apply`. It survives only as
-		 * the fallback seat name in `VaultChatDock`; every caller passes its own.
-		 */
-		const CHAT_SLOT = 'sidebar.chat.conversation';
-		/**
-		 * The note page's OWN conversation seat.
-		 *
-		 * It cannot reuse `sidebar.chat.conversation`: the slots core allows exactly
-		 * one declarer per slot, and a second declaration throws inside `apply` — which
-		 * makes the shell roll back every registration this plugin made. A distinct
-		 * name costs nothing, and declaring it is also what EARNS the note page the
-		 * `SessionProvider` it needs: the renderer hands out `renderSlot` and
-		 * `SessionProvider` only to an entry that declares a session-scoped child.
-		 */
-		const NOTE_CHAT_SLOT = 'dsh-obsidian/note.conversation';
-		/**
-		 * The notes panel's conversation seat.
-		 *
-		 * This plugin used to declare the SHELL's `sidebar.chat.conversation` instead,
-		 * on the reasoning that the shipped occupant was missing in one profile. That
-		 * reasoning does not survive a profile where ui-subagent IS loaded: it declares
-		 * that same slot, and a second declaration throws — which cost the panel its
-		 * body, so opening the tab said "nothing can view this". Declaring a slot
-		 * someone else may own is never safe; owning our own always is.
-		 */
-		const PANEL_CHAT_SLOT = 'dsh-obsidian/panel.conversation';
-
-		/**
-		 * The conversation box' height is the reader's to set.
-		 *
-		 * It is NOT derived from the pane. Guessing a proportion put the box in the
-		 * wrong place twice, and only the reader knows how much of the pane the notes
-		 * above deserve today. A drag handle sets it, and the choice is remembered.
-		 */
-		const CHAT_DOCK_MIN_PX = 140;
-		/** Space the reading area above keeps no matter how far the handle is dragged. */
-		const CHAT_DOCK_RESERVED_PX = 140;
-		const CHAT_DOCK_DEFAULT_PX = 340;
-		const CHAT_HEIGHT_KEY = 'dsh-obsidian/chat-height';
-
-		/** The remembered height, or undefined when there is none (or storage is closed). */
-		function readStoredChatHeight() {
-			try {
-				const raw = window.localStorage?.getItem(CHAT_HEIGHT_KEY);
-				if (typeof raw !== 'string' || raw === '') return undefined;
-				const value = Number(raw);
-				return Number.isFinite(value) && value > 0 ? value : undefined;
-			} catch (error) {
-				return undefined;
-			}
-		}
-
-		/** Remember one height. Storage may be unavailable or full; neither is fatal. */
-		function storeChatHeight(value) {
-			try {
-				window.localStorage?.setItem(CHAT_HEIGHT_KEY, String(Math.round(value)));
-			} catch (error) {
-				/* a preference that cannot be saved is still a preference that works */
-			}
-		}
-
-		/**
-		 * The box's height, its clamp, and its persistence.
-		 *
-		 * Clamping needs the pane's real box, so callers hand in a ref to the element
-		 * the box lives in; before mount (and in a host without layout) a fixed
-		 * fallback keeps the arithmetic sane.
-		 * @param rootRef - ref to the pane element the box is attached to.
-		 */
-		function useChatDockHeight(rootRef) {
-			const [height, setHeight] = React.useState(() => readStoredChatHeight() ?? CHAT_DOCK_DEFAULT_PX);
-			// The latest value, for the commit that runs on pointer-up. It is written
-			// in `resize`, NOT during render: pointermove and pointerup can both run
-			// before React re-renders, so a render-time ref would still hold the
-			// previous height when the drag ends.
-			const latest = React.useRef(height);
-
-			const clamp = React.useCallback((value) => {
-				const box = rootRef === null || rootRef === undefined ? null : rootRef.current;
-				const measured = box === null || box === undefined ? undefined : box.getBoundingClientRect().height;
-				const available = typeof measured === 'number' && measured > 0 ? measured : 700;
-				const ceiling = Math.max(CHAT_DOCK_MIN_PX, Math.round(available - CHAT_DOCK_RESERVED_PX));
-				return Math.min(Math.max(Math.round(value), CHAT_DOCK_MIN_PX), ceiling);
-			}, [rootRef]);
-
-			const resize = React.useCallback((value) => {
-				const next = clamp(value);
-				latest.current = next;
-				setHeight(next);
-			}, [clamp]);
-
-			const commit = React.useCallback(() => { storeChatHeight(latest.current); }, []);
-
-			return { height, resize, commit };
-		}
+		// One extra DSH Session whose Workspace is the vault, so the agent works with
+		// vault-relative paths and this plugin's tools. It is SHOWN by the shell, in
+		// the centre, as an ordinary Session — see `ConversationButton`. Nothing
+		// about the conversation is reimplemented, and nothing about it is in this
+		// plugin's layout.
 
 		/** How long a feedback line stays before it clears itself. */
 		const FEEDBACK_MS = 2600;
@@ -193,22 +94,10 @@ window.__ModuleLoader__.load({
 			return [text, show];
 		}
 
-		/**
-		 * The vault conversation's own composer actions, published by the occupant of
-		 * `sidebar.chat.conversation`.
-		 *
-		 * The standard `inputActions` a tab body receives belong to the Session whose
-		 * Sidebar this is — the MAIN conversation. The box's composer belongs to the
-		 * vault Session, so the only place its actions can be read is its own
-		 * occupant, which sits inside the box's `SessionProvider`. It publishes them
-		 * here so "attach to THIS conversation" can target the box.
-		 */
-		let vaultChatInputActions;
-
 		/** What each `mentionInto` outcome should say to the reader. */
 		const ATTACH_MESSAGE = {
-			ok: '已附进对话',
-			'no-actions': '找不到这个对话的输入框',
+			ok: '已引用进对话',
+			'no-actions': '打不开这个对话的输入框',
 			'no-path': '无法引用这个路径',
 			refused: '未能插入，输入框正忙',
 		};
@@ -261,24 +150,29 @@ window.__ModuleLoader__.load({
 		}
 
 		/**
-		 * The Session this plugin talks to the vault in, created on first use.
+		 * Which Session this plugin talks to the vault in, and whether it already existed.
 		 *
-		 * Two things have to be true for the box to behave like "the knowledge base's
-		 * own chat" rather than a generic new conversation:
+		 * Two things have to be true for the conversation to behave like "the knowledge
+		 * base's own chat" rather than a generic new conversation:
 		 *
 		 * 1. it must belong to the vault's **Workspace** — a Session created with only
 		 *    a `cwd` is a Session in no Workspace, and the conversation then opens on
 		 *    the blank "new Session" screen, workspace picker and all;
 		 * 2. it must be the *same* Session every time, so a plan survives a reload.
 		 *
+		 * `resumed` is what tells the reader "there is something to come back to": true
+		 * when the id came from the remembered state, false when this call created one.
+		 * The caller uses it to offer "continue, or start over" instead of silently
+		 * deciding for them.
+		 *
 		 * `workspaces.create` is documented as idempotently resolving an existing
 		 * path, so this never duplicates the 知识库 workspace.
 		 * @param ctx - plugin context carrying Sessions, Workspaces and fetch.
-		 * @returns the Session id, or undefined when the vault cannot be resolved.
+		 * @returns `{ sessionId, resumed }`; sessionId is undefined when the vault cannot be resolved.
 		 */
-		function resolveVaultChatSession(ctx) {
-			if (vaultChatSession !== undefined) return vaultChatSession;
-			vaultChatSession = (async () => {
+		function resolveVaultChatTarget(ctx) {
+			if (vaultChatTarget !== undefined) return vaultChatTarget;
+			vaultChatTarget = (async () => {
 				const status = await getJson(API.status);
 				const vaultPath = typeof status.vaultPath === 'string' ? status.vaultPath : undefined;
 				if (vaultPath === undefined) return undefined;
@@ -310,7 +204,7 @@ window.__ModuleLoader__.load({
 				if (remembered !== '') {
 					const probe = serviceOf(ctx, 'sessions');
 					if (probe === undefined || typeof probe.binding !== 'function' || probe.binding(remembered) !== undefined) {
-						return remembered;
+						return { sessionId: remembered, resumed: true };
 					}
 					console.warn('[dsh-obsidian] the remembered conversation Session no longer exists; creating a new one', remembered);
 				}
@@ -343,17 +237,293 @@ window.__ModuleLoader__.load({
 					throw new Error('无法记住这个对话的 Session id（下次打开会新建一个）：'
 						+ String(error && error.message ? error.message : error));
 				}
-				return created;
+				return { sessionId: created, resumed: false };
 			})().catch((error) => {
 				// Let a later mount try again rather than caching the failure.
-				vaultChatSession = undefined;
+				vaultChatTarget = undefined;
 				throw error;
 			});
-			return vaultChatSession;
+			return vaultChatTarget;
 		}
 
-		/** Memoised `resolveVaultChatSession`, shared by every panel instance. */
-		let vaultChatSession;
+		/** Memoised `resolveVaultChatTarget`, shared by every surface. */
+		let vaultChatTarget;
+
+		/** The Session id alone, for callers that do not care whether it was resumed. */
+		function resolveVaultChatSession(ctx) {
+			return resolveVaultChatTarget(ctx).then((target) => target.sessionId);
+		}
+
+		/**
+		 * Start a NEW conversation in the vault's Workspace, and remember it.
+		 *
+		 * Only the reader can decide this: "continue where we left off" and "start over"
+		 * are different intentions, and the remembered Session cannot express the second
+		 * one. The old id is replaced only AFTER the new Session exists, so a failure
+		 * here leaves the history addressable.
+		 * @param ctx - plugin context.
+		 * @returns the new Session id.
+		 */
+		function startFreshVaultConversation(ctx) {
+			return getJson(API.status).then((status) => {
+				const vaultPath = typeof status.vaultPath === 'string' ? status.vaultPath : undefined;
+				if (vaultPath === undefined || vaultPath === '') throw new Error('还没有知识库路径');
+				const workspaces = serviceOf(ctx, 'workspaces');
+				if (workspaces === undefined || typeof workspaces.create !== 'function') {
+					throw new Error('对话服务不可用：Workspaces 未加载');
+				}
+				const sessions = serviceOf(ctx, 'sessions');
+				if (sessions === undefined || typeof sessions.create !== 'function') {
+					throw new Error('对话服务不可用：Sessions 未加载');
+				}
+				return Promise.resolve(workspaces.create({ path: vaultPath })).catch(() => undefined)
+					.then((workspace) => {
+						const workspaceId = workspace === null || workspace === undefined ? undefined : workspace.workspaceId;
+						return sessions.create(workspaceId === undefined
+							? { cwd: vaultPath }
+							: { workspaceId, cwd: vaultPath });
+					})
+					.then((created) => postJson(API.chat, { sessionId: created }).then(() => {
+						// The memo now names the new Session, and it counts as one to come
+						// back to: the next 对话 must offer it rather than create another.
+						vaultChatTarget = Promise.resolve({ sessionId: created, resumed: true });
+						return created;
+					}));
+			});
+		}
+
+		/**
+		 * Register the vault's Workspace as soon as the reader agrees to a folder.
+		 *
+		 * The Workspace is what makes the folder a place the agent can be sent to, and
+		 * what the sidebar lists; resolving it lazily on the first conversation meant
+		 * nothing appeared until the reader went looking for the conversation. It is
+		 * idempotent by contract, and a failure here costs nothing — the next
+		 * conversation resolves it anyway.
+		 * @param ctx - plugin context.
+		 * @param path - the folder the reader agreed to.
+		 */
+		function ensureVaultWorkspace(ctx, path) {
+			if (typeof path !== 'string' || path === '') return;
+			const workspaces = serviceOf(ctx, 'workspaces');
+			if (workspaces === undefined || workspaces === null || typeof workspaces.create !== 'function') return;
+			try {
+				Promise.resolve(workspaces.create({ path })).catch(() => {});
+			} catch (error) {
+				/* a workspace that cannot be registered now is registered on first use */
+			}
+		}
+
+		/**
+		 * What this plugin last had on screen in the right Sidebar, and its browse state.
+		 *
+		 * The right Sidebar's tabs are SESSION-scoped, so switching the centre to another
+		 * Session hands the pane a different tab set: our panel and our note pages vanish
+		 * along with the Session they belonged to. The reader asked to open a
+		 * conversation — not to lose the tree — so the surface is put back on the far
+		 * side, with the expansion and selection it had. It is the SAME vault either way,
+		 * which is what makes the browsing state still true after the switch.
+		 */
+		let lastSurface = null;
+		let panelBrowseState = null;
+
+		/** Record which surface is on screen, so a Session switch can restore it. */
+		function rememberSurface(surface) {
+			lastSurface = surface;
+		}
+
+		/**
+		 * Put the last surface back after the centre switched Sessions.
+		 *
+		 * The switch is asynchronous and the pane remounts for the new Session, so a
+		 * single call can land before there is a pane to land in. A few attempts over
+		 * about a second is enough, and an extra `openTab` for an already-open tab is
+		 * harmless.
+		 * @param ctx - plugin context owning the right-Sidebar navigator.
+		 */
+		function restoreSurface(ctx) {
+			const surface = lastSurface;
+			if (surface === null || ctx === null || ctx === undefined) return;
+			let attempt = 0;
+			const put = () => {
+				attempt += 1;
+				try {
+					if (surface.kind === 'note' && typeof surface.path === 'string' && surface.path !== '') {
+						ctx.sidebarRight.openResource(noteAddress(surface.path));
+					} else {
+						ctx.sidebarRight.openTab(TAB_KIND);
+					}
+				} catch (error) {
+					/* no Session surface mounted yet: the next attempt is the retry */
+				}
+				if (attempt < 4) setTimeout(put, attempt * 250);
+			};
+			put();
+		}
+
+		/**
+		 * Show one vault Session the way the app shows any conversation: in the centre,
+		 * through the shell's own panel.
+		 *
+		 * Nothing about this plugin's layout is involved, and that is the point. A
+		 * right-Sidebar pane is a few hundred pixels of tool space, so a conversation
+		 * put there either eats the tree's height or replaces it; the centre is where
+		 * the app puts conversations, it is full width, and the tree and the note stay
+		 * visible beside it. The Session is host-side, so opening and closing this view
+		 * costs the conversation nothing.
+		 * @param ctx - plugin context.
+		 * @param report - the calling surface's feedback line.
+		 * @param sessionId - the vault Session to select.
+		 * @returns whether the shell was asked.
+		 */
+		function showVaultChatSession(ctx, report, sessionId) {
+			const navigator = serviceOf(ctx, 'uiWorkspace');
+			if (navigator === undefined || navigator === null || typeof navigator.openSession !== 'function') {
+				report('这个环境没有会话导航，打不开对话', 4200);
+				return false;
+			}
+			if (typeof sessionId !== 'string' || sessionId === '') {
+				report('打不开对话：拿不到会话', 4200);
+				return false;
+			}
+			navigator.openSession(sessionId);
+			// Selecting a Session gives the right Sidebar a new, empty tab set: put the
+			// reader's tree (or note) back, because they did not close it.
+			restoreSurface(ctx);
+			report('');
+			return true;
+		}
+
+		/**
+		 * `对话`: open the vault conversation — or, when the reader has been there
+		 * before, ask whether to continue it or start a fresh one.
+		 *
+		 * The remembered Session is the one holding the history, so it is what "open the
+		 * conversation" should mean. But "continue" and "start over" are different
+		 * intentions, and silently choosing the first made the second impossible without
+		 * going hunting through the workspace — while silently choosing the second
+		 * threw the history away. So the choice is the reader's, and the menu only
+		 * appears when there is something to continue.
+		 * @param props - `ctx`, the surface's `report`, and an optional icon size.
+		 */
+		function ConversationButton(props) {
+			const { ctx, report } = props;
+			const [menu, setMenu] = React.useState(false);
+			const [busy, setBusy] = React.useState(false);
+			const wrapRef = React.useRef(null);
+
+			const begin = React.useCallback(() => {
+				setBusy(true);
+				report('正在打开对话…', 0);
+				return resolveVaultChatTarget(ctx).then((target) => {
+					setBusy(false);
+					if (target.resumed === true) {
+						// There is history: let the reader say whether they want it.
+						setMenu(true);
+						report('');
+						return;
+					}
+					showVaultChatSession(ctx, report, target.sessionId);
+				}).catch((error) => {
+					setBusy(false);
+					report('打不开对话：' + String(error && error.message ? error.message : error), 4200);
+				});
+			}, [ctx, report]);
+
+			const continueLast = React.useCallback(() => {
+				setMenu(false);
+				resolveVaultChatTarget(ctx).then((target) => {
+					showVaultChatSession(ctx, report, target.sessionId);
+				}).catch((error) => {
+					report('打不开对话：' + String(error && error.message ? error.message : error), 4200);
+				});
+			}, [ctx, report]);
+
+			const startFresh = React.useCallback(() => {
+				setMenu(false);
+				setBusy(true);
+				report('正在新建对话…', 0);
+				startFreshVaultConversation(ctx).then((sessionId) => {
+					setBusy(false);
+					showVaultChatSession(ctx, report, sessionId);
+				}).catch((error) => {
+					setBusy(false);
+					report('新建对话失败：' + String(error && error.message ? error.message : error), 4200);
+				});
+			}, [ctx, report]);
+
+			// Dismiss on anything outside: a menu that only its own button can close is a
+			// menu that stays open while the reader works somewhere else.
+			React.useEffect(() => {
+				if (!menu) return undefined;
+				const onDown = (event) => {
+					const node = wrapRef.current;
+					if (node !== null && node !== undefined && typeof node.contains === 'function'
+						&& event.target !== null && node.contains(event.target)) return;
+					setMenu(false);
+				};
+				document.addEventListener('mousedown', onDown);
+				return () => document.removeEventListener('mousedown', onDown);
+			}, [menu]);
+
+			const item = (key, label, hint, onClick) => h('button', {
+				key,
+				type: 'button',
+				onClick,
+				style: {
+					display: 'block',
+					width: '100%',
+					textAlign: 'left',
+					border: 'none',
+					borderRadius: 6,
+					background: 'transparent',
+					color: 'inherit',
+					font: 'inherit',
+					fontSize: 13,
+					lineHeight: 1.4,
+					padding: '7px 9px',
+					cursor: 'pointer',
+				},
+			}, [
+				h('div', { key: 'l' }, label),
+				h('div', { key: 'h', style: { fontSize: 11.5, color: T.labelSecondary, marginTop: 1 } }, hint),
+			]);
+
+			return h('span', {
+				ref: wrapRef,
+				'data-dsh-obsidian-chat-menu': menu ? 'open' : 'closed',
+				style: { position: 'relative', display: 'inline-flex' },
+			}, [
+				h(IconButton, {
+					key: 'button',
+					title: '在中间打开知识库对话（不占右侧栏）',
+					text: '对话',
+					icon: ChatIcon,
+					disabled: busy,
+					onClick: begin,
+				}),
+				menu ? h('div', {
+					key: 'menu',
+					role: 'menu',
+					style: {
+						position: 'absolute',
+						top: '100%',
+						right: 0,
+						marginTop: 4,
+						width: 190,
+						padding: 4,
+						background: T.bgOverlay,
+						border: '1px solid ' + T.borderL2,
+						borderRadius: 8,
+						boxShadow: T.shadow,
+						zIndex: 9,
+					},
+				}, [
+					item('continue', '继续上次对话', '回到知识库里的那段历史', continueLast),
+					item('fresh', '新开一个对话', '同一工作区，从空白开始', startFresh),
+				]) : null,
+			]);
+		}
 
 		// ── the note page ───────────────────────────────────────────────────
 		//
@@ -586,6 +756,13 @@ window.__ModuleLoader__.load({
 				h('path', { key: 'a', d: 'M4 6h16' }),
 				h('path', { key: 'b', d: 'M8 12h12' }),
 				h('path', { key: 'c', d: 'M11 18h9' }),
+			]);
+		}
+
+		/** A speech bubble, for the conversation dialog. */
+		function ChatIcon(props) {
+			return svg(props.size, null, [
+				h('path', { key: 'a', d: 'M4.5 5.5h15v9.6h-8.3L6.6 19v-3.9H4.5z' }),
 			]);
 		}
 
@@ -1021,13 +1198,13 @@ window.__ModuleLoader__.load({
 					background: props.active === true || hovered ? T.hover : 'transparent',
 					color: props.active === true ? T.brand : 'inherit',
 					font: 'inherit',
-					fontSize: 12,
-					lineHeight: 1.35,
+					fontSize: 13.5,
+					lineHeight: 1.4,
 					fontWeight: props.level <= 1 ? 600 : 400,
 					opacity: props.level >= 5 ? 0.85 : 1,
 					cursor: 'pointer',
-					padding: '4px 7px',
-					paddingLeft: 7 + (props.level - 1) * 11,
+					padding: '5px 8px',
+					paddingLeft: 8 + (props.level - 1) * 12,
 					overflow: 'hidden',
 					textOverflow: 'ellipsis',
 					whiteSpace: 'nowrap',
@@ -1118,10 +1295,10 @@ window.__ModuleLoader__.load({
 				style: {
 					display: 'flex',
 					alignItems: 'center',
-					gap: 4,
-					height: 24,
+					gap: 5,
+					height: 28,
 					paddingRight: 6,
-					paddingLeft: 4 + props.depth * 11,
+					paddingLeft: 4 + props.depth * 13,
 					borderRadius: 5,
 					cursor: 'pointer',
 					background: active ? T.bgLayer2 : (hovered ? T.hover : 'transparent'),
@@ -1133,15 +1310,15 @@ window.__ModuleLoader__.load({
 			}, [
 				h('span', {
 					key: 'chev',
-					style: { display: 'flex', width: 13, justifyContent: 'center', opacity: 0.7 },
-				}, isDir ? h(ChevronIcon, { size: 12, open }) : null),
+					style: { display: 'flex', width: 14, justifyContent: 'center', opacity: 0.7 },
+				}, isDir ? h(ChevronIcon, { size: 13, open }) : null),
 				h('span', {
 					key: 'icon',
 					style: { display: 'flex', opacity: 0.62 },
-				}, isDir ? h(FolderIcon, { size: 12.5 }) : h(FileIcon, { size: 12.5 })),
+				}, isDir ? h(FolderIcon, { size: 13.5 }) : h(FileIcon, { size: 13.5 })),
 				h('span', {
 					key: 'name',
-					style: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12.5 },
+					style: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 14 },
 					// Obsidian's explorer labels a note without its extension.
 				}, isDir ? node.name : node.name.replace(/\.[^./]+$/, '')),
 				// The selected note gains its handoff: "drop this document into the
@@ -1150,8 +1327,8 @@ window.__ModuleLoader__.load({
 					? h('button', {
 						key: 'attach',
 						type: 'button',
-						title: '把这篇笔记附进主对话（等价于拖入）',
-						'aria-label': '同步到主对话',
+						title: '把这篇文章引用进对话（等价于拖入）',
+						'aria-label': '引用到对话',
 						onClick: (event) => {
 							event.preventDefault();
 							event.stopPropagation();
@@ -1167,11 +1344,11 @@ window.__ModuleLoader__.load({
 							background: 'transparent',
 							color: T.brand,
 							font: 'inherit',
-							fontSize: 11,
+							fontSize: 12.5,
 							cursor: 'pointer',
 							whiteSpace: 'nowrap',
 						},
-					}, h(HandoffIcon, { key: 'i', size: 12 }), '发送')
+					}, h(HandoffIcon, { key: 'i', size: 13 }), '发送')
 					: null,
 			]);
 
@@ -1189,8 +1366,8 @@ window.__ModuleLoader__.load({
 							key: 'err',
 							style: {
 								padding: '3px 8px',
-								paddingLeft: 21 + props.depth * 11,
-								fontSize: 11.5,
+								paddingLeft: 21 + props.depth * 13,
+								fontSize: 12.5,
 								color: T.error,
 								lineHeight: 1.6,
 							},
@@ -1200,8 +1377,8 @@ window.__ModuleLoader__.load({
 								key: 'pending',
 								style: {
 									padding: '3px 8px',
-									paddingLeft: 21 + props.depth * 11,
-									fontSize: 11.5,
+									paddingLeft: 21 + props.depth * 13,
+									fontSize: 12.5,
 									color: T.labelSecondary,
 								},
 							}, props.loadingPaths.has(node.path) ? '读取中…' : '…')
@@ -1211,8 +1388,8 @@ window.__ModuleLoader__.load({
 										key: 'empty',
 										style: {
 											padding: '3px 8px',
-											paddingLeft: 21 + props.depth * 11,
-											fontSize: 11.5,
+											paddingLeft: 21 + props.depth * 13,
+											fontSize: 12.5,
 											color: T.labelSecondary,
 										},
 									}, '（空）')
@@ -1243,31 +1420,29 @@ window.__ModuleLoader__.load({
 		/**
 		 * Build the vault panel.
 		 *
-		 * A factory rather than a bare component because the panel owns the
-		 * conversation box, and that box needs the plugin context (Sessions, the
-		 * Session resolver) which only `apply` holds.
+		 * A factory rather than a bare component because the panel opens the vault
+		 * conversation in the centre, and that needs the plugin context (the right-Sidebar
+		 * navigator) which only `apply` holds.
 		 *
 		 * @param ctx - plugin context.
-		 * @param withChat - whether this occurrence declares the conversation seat and
-		 * therefore shows the box. Only the right-Sidebar tab does: the centre panel's
-		 * registration is root-scoped, so it does not declare a session-scoped child.
 		 */
-		function makeNotesPanel(ctx, withChat) {
-			// Built ONCE per registration, not inline in the render: a fresh function
-			// identity on every render would re-run the conversation box's acquire
-			// effect on every render, retaining and releasing the Session in a loop.
-			const ensureSession = () => resolveVaultChatSession(ctx);
+		function makeNotesPanel(ctx) {
 			return function NotesPanel(props) {
+			// The reader's browsing state survives the remount a Session switch costs it:
+			// the vault is the same vault, so the expansion, the selection and the levels
+			// already fetched are still true. Page-level memory, not a durable preference,
+			// and it is dropped outright when the vault itself turns out to be another one.
+			const cached = panelBrowseState;
 			const [vault, setVault] = React.useState('');
 			const [vaultRoot, setVaultRoot] = React.useState('');
 			const [treeError, setTreeError] = React.useState('');
-			const [childrenMap, setChildrenMap] = React.useState(() => new Map());
+			const [childrenMap, setChildrenMap] = React.useState(() => (cached === null ? new Map() : cached.childrenMap));
 			const [dirErrors, setDirErrors] = React.useState(() => new Map());
 			const [truncatedPaths, setTruncatedPaths] = React.useState(() => new Map());
 			const [loadingPaths, setLoadingPaths] = React.useState(() => new Set());
-			const [expanded, setExpanded] = React.useState(() => new Set());
-			const [selected, setSelected] = React.useState('');
-			const [query, setQuery] = React.useState('');
+			const [expanded, setExpanded] = React.useState(() => (cached === null ? new Set() : cached.expanded));
+			const [selected, setSelected] = React.useState(() => (cached === null ? '' : cached.selected));
+			const [query, setQuery] = React.useState(() => (cached === null ? '' : cached.query));
 			const [results, setResults] = React.useState(null);
 			const [resultsTruncated, setResultsTruncated] = React.useState(false);
 			// How many notes the search could not read at all, kept apart from the
@@ -1280,9 +1455,11 @@ window.__ModuleLoader__.load({
 			// Monotonic request id for searches: a slow first answer must not land on
 			// top of a newer query's results.
 			const searchSeq = React.useRef(0);
-			// The conversation box's height is the reader's, dragged not derived.
 			const panelRef = React.useRef(null);
-			const chatBox = useChatDockHeight(panelRef);
+
+			// The reader is looking at the tree panel, so it is what a Session switch has
+			// to put back (see `rememberSurface` / `restoreSurface`).
+			React.useEffect(() => { rememberSurface({ kind: 'notes' }); }, []);
 
 			/** Fetch one directory level. '' is the vault root. */
 			const loadDir = React.useCallback((path) => {
@@ -1440,8 +1617,40 @@ window.__ModuleLoader__.load({
 				? vaultInfo.path
 				: '';
 			React.useEffect(() => {
-				if (agreedVaultPath !== '') loadDir('');
-			}, [agreedVaultPath, loadDir]);
+				if (agreedVaultPath === '') return;
+				loadDir('');
+				// The folder is the reader's answer to "which vault": the Workspace is what
+				// makes it a place the agent can be sent to, and what the sidebar lists.
+				// Resolving it here — rather than on the first 对话 — means the workspace
+				// exists from the moment the reader has chosen, instead of appearing only
+				// after they went looking for the conversation. Idempotent by contract.
+				ensureVaultWorkspace(ctx, agreedVaultPath);
+			}, [agreedVaultPath, loadDir, ctx]);
+
+			// A remount (a Session switch) restores the expansion and the levels it had —
+			// unless the vault itself turned out to be another one, in which case nothing
+			// from the old tree survives.
+			React.useEffect(() => {
+				if (agreedVaultPath === '') return;
+				if (panelBrowseState !== null && panelBrowseState.vaultPath !== agreedVaultPath) {
+					panelBrowseState = null;
+					setChildrenMap(new Map());
+					setExpanded(new Set());
+					setSelected('');
+					setQuery('');
+				}
+			}, [agreedVaultPath]);
+
+			React.useEffect(() => {
+				if (agreedVaultPath === '') return;
+				panelBrowseState = {
+					vaultPath: agreedVaultPath,
+					childrenMap,
+					expanded,
+					selected,
+					query,
+				};
+			}, [agreedVaultPath, childrenMap, expanded, selected, query]);
 
 			// A note opens in its OWN tab: the tree stays put, and the note renders
 			// full-height on a page of its own.
@@ -1526,7 +1735,7 @@ window.__ModuleLoader__.load({
 			}, results.length === 0
 				? h('div', {
 					key: 'none',
-					style: { padding: '10px 6px', fontSize: 12, color: T.labelSecondary },
+					style: { padding: '12px 8px', fontSize: 13, color: T.labelSecondary },
 					// "没有匹配" over a search that never read a large note would be a
 					// claim it cannot make; an empty result that IS a complete answer
 					// still reads exactly as before.
@@ -1538,12 +1747,12 @@ window.__ModuleLoader__.load({
 						key: hit.path + ':' + hit.line + ':' + index,
 						onClick: () => openNote(hit.path),
 						title: hit.path + ' : ' + hit.line,
-						style: { padding: '6px 7px', borderRadius: 6, cursor: 'pointer' },
+						style: { padding: '7px 8px', borderRadius: 6, cursor: 'pointer' },
 					}, [
 						h('div', {
 							key: 'p',
 							style: {
-								fontSize: 11.5,
+								fontSize: 12.5,
 								color: T.labelSecondary,
 								overflow: 'hidden',
 								textOverflow: 'ellipsis',
@@ -1553,7 +1762,7 @@ window.__ModuleLoader__.load({
 						h('div', {
 							key: 't',
 							style: {
-								fontSize: 12,
+								fontSize: 13,
 								marginTop: 2,
 								overflow: 'hidden',
 								textOverflow: 'ellipsis',
@@ -1656,7 +1865,7 @@ window.__ModuleLoader__.load({
 					h('div', {
 						key: 'n',
 						style: {
-							fontSize: 12.5,
+							fontSize: 13.5,
 							fontWeight: 600,
 							overflow: 'hidden',
 							textOverflow: 'ellipsis',
@@ -1675,6 +1884,7 @@ window.__ModuleLoader__.load({
 					disabled: loadingPaths.has(''),
 					onClick: reloadAll,
 				}),
+				h(ConversationButton, { key: 'c', ctx, report: showFeedback }),
 				h(IconButton, {
 					key: 'v',
 					title: vaultInfo !== null && typeof vaultInfo.path === 'string' && vaultInfo.path !== ''
@@ -1719,7 +1929,7 @@ window.__ModuleLoader__.load({
 						background: 'transparent',
 						color: 'inherit',
 						font: 'inherit',
-						fontSize: 12.5,
+						fontSize: 13.5,
 					},
 				}),
 				query !== '' ? h('span', {
@@ -1747,20 +1957,6 @@ window.__ModuleLoader__.load({
 					key: 'body',
 					style: { flex: '1 1 auto', minHeight: 0, overflowY: 'auto' },
 				}, browseBody),
-				// The conversation box, pinned to the foot of the panel: same Session
-				// every time, in the vault's own Workspace. `sessions` is looked up
-				// lazily through `ctx.get` — it is not in `inject`, and a missing one
-				// costs this box, not the tree.
-				withChat ? h(VaultChatDock, {
-					key: 'chat',
-					...props,
-					seatName: PANEL_CHAT_SLOT,
-					height: chatBox.height,
-					onResize: chatBox.resize,
-					onResizeCommit: chatBox.commit,
-					sessions: serviceOf(ctx, 'sessions'),
-					ensureSession,
-				}) : null,
 			]);
 			};
 		}
@@ -1770,11 +1966,8 @@ window.__ModuleLoader__.load({
 		 * the page to other notes, plus a handoff into the main conversation.
 		 */
 		function makeNoteTab(ctx) {
-			// Built ONCE per registration, not inline in the render: a fresh identity
-			// each render would re-run the dock's acquire effect in a loop.
-			const ensureSession = () => resolveVaultChatSession(ctx);
 			return function NoteTab(props) {
-				const { useTabInfo, inputActions, renderSlot, SessionProvider } = props;
+				const { useTabInfo, inputActions } = props;
 				const { tab } = useTabInfo();
 				const initialPath = parseNoteAddress(tab.contentId);
 				const [path, setPath] = React.useState(initialPath);
@@ -1786,10 +1979,15 @@ window.__ModuleLoader__.load({
 				const [editing, setEditing] = React.useState(false);
 				const [draftText, setDraftText] = React.useState('');
 				const [saving, setSaving] = React.useState(false);
-				// The conversation box's height, the reader's to drag — same preference
-				// as the 知识库 panel's, remembered across both.
+				// This page's own layout ref; the conversation is not drawn here any more.
 				const noteRef = React.useRef(null);
-				const chatBox = useChatDockHeight(noteRef);
+
+				// The reader is looking at THIS page, so it is what a Session switch has
+				// to put back. Kept current as the page turns (a `[[wikilink]]` moves it).
+				React.useEffect(() => {
+					if (path !== undefined) rememberSurface({ kind: 'note', path });
+				}, [path]);
+
 				// Monotonic request id: `load` is called for every path the page turns
 				// to, and a slow answer for the previous note must not overwrite the
 				// note the reader is actually looking at.
@@ -1855,8 +2053,16 @@ window.__ModuleLoader__.load({
 					}).catch(() => { keepFeedback('无法解析链接：' + target, 3200); });
 				}, [keepFeedback]);
 
-				/** Attach this note to the MAIN (centre) conversation. */
-				const attachToMain = React.useCallback(() => {
+				/**
+				 * Quote this note into the conversation on screen.
+				 *
+				 * The `inputActions` a tab body receives belong to the Session whose
+				 * Sidebar this is — the conversation the centre is showing. With the vault
+				 * conversation opened there, this is exactly the vault conversation's
+				 * composer; with any other Session showing, it is that one's, which is
+				 * also what dragging a file into it would do.
+				 */
+				const attachToConversation = React.useCallback(() => {
 					if (path === undefined || note === null) {
 						keepFeedback('还没有可发送的内容');
 						return;
@@ -1865,19 +2071,6 @@ window.__ModuleLoader__.load({
 					// `no-path` and the reader is told, rather than shown `@undefined`.
 					keepFeedback(ATTACH_MESSAGE[mentionInto(inputActions, absoluteVaultPath(note.root, path))]);
 				}, [path, note, inputActions, keepFeedback]);
-
-				/**
-				 * Attach this note to THIS panel's conversation — the box at the foot of
-				 * the sidebar, whose composer belongs to the vault Session.
-				 */
-				const attachToDock = React.useCallback(() => {
-					if (path === undefined || note === null) {
-						keepFeedback('还没有可发送的内容');
-						return;
-					}
-					// Read at click time: the box publishes its face when it mounts.
-					keepFeedback(ATTACH_MESSAGE[mentionInto(vaultChatInputActions, absoluteVaultPath(note.root, path))]);
-				}, [path, note, keepFeedback]);
 
 				const startEdit = React.useCallback(() => {
 					if (note === null) return;
@@ -1999,12 +2192,18 @@ window.__ModuleLoader__.load({
 									border: 'none',
 									outline: 'none',
 									resize: 'none',
-									padding: '16px 20px',
+									// The SAME box as the reading view: entering edit mode must not
+									// reflow the page the reader was just looking at. A monospace
+									// 13px editor against a 16px proportional reading view made the
+									// text jump, the line breaks move, and the page read as a
+									// different document — the mode change was visible before a
+									// single character was typed.
+									padding: '18px 22px 96px',
 									background: 'transparent',
 									color: 'inherit',
-									fontFamily: T.mono,
-									fontSize: 13,
-									lineHeight: 1.65,
+									fontFamily: 'inherit',
+									fontSize: READ.size,
+									lineHeight: READ.lineHeight,
 								},
 							})
 							: h('div', {
@@ -2062,6 +2261,7 @@ window.__ModuleLoader__.load({
 							icon: OutlineIcon,
 							onClick: () => setOutlineOpen((open) => !open),
 						}),
+						h(ConversationButton, { key: 'chat', ctx, report: keepFeedback }),
 						h(IconButton, {
 							key: 'edit',
 							title: '直接编辑这篇笔记的 Markdown',
@@ -2070,18 +2270,11 @@ window.__ModuleLoader__.load({
 							onClick: startEdit,
 						}),
 						h(IconButton, {
-							key: 'dock',
-							title: '把这篇文章附进右侧栏这个对话',
-							text: '发到本栏',
+							key: 'attach',
+							title: '把这篇文章引用进对话（等价于拖入）',
+							text: '引用到对话',
 							icon: HandoffIcon,
-							onClick: attachToDock,
-						}),
-						h(IconButton, {
-							key: 'main',
-							title: '把这篇文章附进中间的对话（等价于拖入）',
-							text: '发到主对话',
-							icon: HandoffIcon,
-							onClick: attachToMain,
+							onClick: attachToConversation,
 						}),
 						h(IconButton, {
 							key: 'o',
@@ -2210,19 +2403,6 @@ window.__ModuleLoader__.load({
 								onClick: () => jumpToHeading(item.id),
 							}))),
 					]) : null,
-					// Reading a note and talking about it are the same act, so the
-					// conversation is here too — the same Session as the 知识库 panel's.
-					h(VaultChatDock, {
-						key: 'chat',
-						seatName: NOTE_CHAT_SLOT,
-						renderSlot,
-						SessionProvider,
-						height: chatBox.height,
-						onResize: chatBox.resize,
-						onResizeCommit: chatBox.commit,
-						sessions: serviceOf(ctx, 'sessions'),
-						ensureSession,
-					}),
 				]);
 			};
 		}
@@ -2306,77 +2486,6 @@ window.__ModuleLoader__.load({
 			};
 		}
 
-		// ── the conversation occurrence ──────────────────────────────────────
-		//
-		// `sidebar.chat.conversation` is a seat that a Sidebar chat tab declares and
-		// an occupant fills. The shipped occupant belongs to ui-subagent's sidebar
-		// chat and is NOT registered in every profile: in this deployment the seat
-		// existed but was empty, so the vault chat tab drew its fallback instead of a
-		// conversation. This plugin therefore registers its own occupant rather than
-		// depending on a sibling having registered one.
-		//
-		// The body below is the shipped panel's own logic, so the result matches the
-		// subagent chat tab rather than approximating it.
-
-		/** The strict per-Session Conversation body, selected for one Session. */
-		function FixedChatConversationView(props) {
-			return props.renderSlot('conversation.session', { view: 'chat' });
-		}
-
-		/**
-		 * Render the shared conversation factory for the Session this seat provides.
-		 *
-		 * Every read is defensive. This component sits inside the seat's error
-		 * boundary, and one throw here retires the whole tab body instead of showing
-		 * it — so an unexpected snapshot shape must degrade to a phase, never to an
-		 * exception.
-		 *
-		 * The SAME component occupies both seats: the shell's
-		 * `sidebar.chat.conversation` on the notes panel, and this plugin's own
-		 * `dsh-obsidian/note.conversation` on the note page. It renders whatever
-		 * Session its `SessionProvider` binds, which is why one component covers both.
-		 * @param props - the seat's runtime: session snapshots and the factory share.
-		 */
-		function VaultConversation(props) {
-			const { sessionId, useSession, useConversation, useSessions, renderFactorySlot, inputActions } = props;
-
-			// Publish this seat's input face. Because this component sits inside the
-			// box's `SessionProvider`, its `inputActions` are the VAULT Session's — the
-			// only handle on the box's composer from anywhere in this plugin.
-			React.useEffect(() => {
-				vaultChatInputActions = inputActions;
-				return () => {
-					if (vaultChatInputActions === inputActions) vaultChatInputActions = undefined;
-				};
-			}, [inputActions]);
-
-			const session = useSession((value) => value) ?? {};
-			const conversation = useConversation((value) => value) ?? {};
-			const targets = conversation.activeTargets;
-			const targetCount = targets === undefined || targets === null ? 0 : targets.size;
-			const active = targetCount > 0
-				|| (!session.blank && !session.awaitingFirstTurn)
-				|| session.running === true;
-			const shellPhase = active ? 'active' : (session.promptAttempted === true ? 'engaging' : 'blank');
-			const summaryBlank = useSessions((state) => state?.byId?.[sessionId]?.blank);
-			const subagent = session.subagent;
-			const parentAvailabilityPending = subagent !== undefined && subagent !== null
-				&& subagent.address?.mode === 'continuable'
-				&& subagent.parentAvailable === undefined;
-			const settling = (shellPhase === 'blank' && session.openState === 'loading' && summaryBlank !== true)
-				|| parentAvailabilityPending;
-			// Never the Hero. The Hero is the "start a new Session" screen — headline,
-			// workspace picker, agent preset — and this box is not a new Session: it is
-			// the vault's existing one, always in the vault's Workspace. Showing the
-			// Hero here is what made the box read as "just another new conversation"
-			// and ask which workspace to use.
-			const phase = settling ? 'settling' : 'active';
-
-			return renderFactorySlot('conversation.content', { variant: 'embedded', phase, hero: false }, {
-				slots: { views: FixedChatConversationView },
-			});
-		}
-
 		// ── the vault conversation tab ───────────────────────────────────────
 
 		/** A transfer mark: the plan leaving this conversation for the other one. */
@@ -2385,186 +2494,6 @@ window.__ModuleLoader__.load({
 				h('path', { key: 'a', d: 'M4 12h13' }),
 				h('path', { key: 'b', d: 'm13 6 6 6-6 6' }),
 				h('path', { key: 'c', d: 'M4 6v12' }),
-			]);
-		}
-
-		/**
-		 * The conversation box at the foot of the vault panel.
-		 *
-		 * It supplies the two things the seat cannot know by itself: the vault's own
-		 * Session — retained for exactly as long as this box is mounted — and a
-		 * handoff control. The seat draws the rest.
-		 *
-		 * @param props - panel runtime, plus the Session resolver injected by `apply`.
-		 */
-		function VaultChatDock(props) {
-			const { renderSlot, SessionProvider, sessions, ensureSession } = props;
-			// Which seat this host declared. Every surface here owns its OWN
-			// `dsh-obsidian/*` seat — a slot may have exactly one declarer, and the
-			// shell's `sidebar.chat.conversation` belongs to ui-subagent. `CHAT_SLOT`
-			// is only the fallback name for a caller that passes none.
-			const seatName = props.seatName ?? CHAT_SLOT;
-			const [reference, setReference] = React.useState(null);
-			const [failure, setFailure] = React.useState('');
-
-			// Acquire the Session on mount, release it on unmount: the reference lives
-			// exactly as long as the box does.
-			React.useEffect(() => {
-				if (typeof ensureSession !== 'function' || sessions === undefined) {
-					setFailure('会话服务不可用');
-					return undefined;
-				}
-				const controller = new AbortController();
-				let held = null;
-				let cancelled = false;
-				Promise.resolve()
-					.then(() => ensureSession())
-					.then((sessionId) => {
-						if (cancelled) return;
-						if (typeof sessionId !== 'string' || sessionId === '') {
-							setFailure('找不到知识库工作区');
-							return;
-						}
-						held = sessions.retain(sessionId, { source: 'dsh-obsidian', signal: controller.signal });
-						setReference(held);
-					})
-					.catch((error) => {
-						if (!cancelled) setFailure(String(error && error.message ? error.message : error));
-					});
-				return () => {
-					cancelled = true;
-					controller.abort();
-					if (held !== null) held.release();
-				};
-			}, [ensureSession, sessions]);
-
-			let body;
-			if (failure !== '') {
-				body = h('div', {
-					style: { padding: '10px 12px', fontSize: 12, color: T.error, lineHeight: 1.6 },
-				}, failure);
-			} else if (reference === null) {
-				body = h('div', {
-					style: { padding: '10px 12px', fontSize: 12, color: T.labelSecondary },
-				}, '正在准备知识库对话…');
-			} else if (typeof renderSlot !== 'function' || typeof SessionProvider !== 'function') {
-				// Both come from the same place: an entry earns them by declaring a
-				// session-scoped child. Without them this host cannot show a conversation.
-				body = h('div', {
-					style: { padding: '10px 12px', fontSize: 12, color: T.error, lineHeight: 1.6 },
-				}, '对话组件不可用：这个面板没有声明对话座位。');
-			} else {
-				body = h(SessionProvider, { session: reference },
-					renderSlot(seatName, {}, {
-						fallback: h('div', {
-							style: { padding: '10px 12px', fontSize: 12, color: T.error, lineHeight: 1.6 },
-						}, '对话组件不可用：座位 ' + seatName + ' 没有占用者。'),
-					}));
-			}
-
-			return h('div', {
-				'data-dsh-obsidian-chat-dock': reference === null ? 'pending' : 'ready',
-				style: {
-					// The reader's height, pinned to the pane's foot: `marginTop: auto`
-					// keeps it at the bottom even when the content above is short.
-					flex: '0 0 auto',
-					marginTop: 'auto',
-					height: typeof props.height === 'number' ? props.height : CHAT_DOCK_DEFAULT_PX,
-					minHeight: CHAT_DOCK_MIN_PX,
-					display: 'flex',
-					flexDirection: 'column',
-					overflow: 'hidden',
-					borderTop: '1px solid ' + T.borderL2,
-					color: T.labelPrimary,
-				},
-			}, [
-				h('div', {
-					key: 'grip',
-					'data-dsh-obsidian-chat-grip': 'true',
-					title: '拖动调整高度（双击恢复默认）',
-					role: 'separator',
-					'aria-orientation': 'horizontal',
-					'aria-label': '调整对话栏高度',
-					onPointerDown: (event) => {
-						if (typeof props.onResize !== 'function') return;
-						event.preventDefault();
-						const handle = event.currentTarget;
-						const startY = event.clientY;
-						const startHeight = typeof props.height === 'number' ? props.height : CHAT_DOCK_DEFAULT_PX;
-						// Pointer capture keeps the drag alive outside the 6px strip; not
-						// every host implements it, so it is optional.
-						if (typeof handle.setPointerCapture === 'function') {
-							try { handle.setPointerCapture(event.pointerId); } catch (error) { /* optional */ }
-						}
-						const onMove = (moveEvent) => {
-							props.onResize(startHeight - (moveEvent.clientY - startY));
-						};
-						const onEnd = () => {
-							handle.removeEventListener('pointermove', onMove);
-							handle.removeEventListener('pointerup', onEnd);
-							handle.removeEventListener('pointercancel', onEnd);
-							if (typeof props.onResizeCommit === 'function') props.onResizeCommit();
-						};
-						handle.addEventListener('pointermove', onMove);
-						handle.addEventListener('pointerup', onEnd);
-						handle.addEventListener('pointercancel', onEnd);
-					},
-					onDoubleClick: () => {
-						if (typeof props.onResize !== 'function') return;
-						props.onResize(CHAT_DOCK_DEFAULT_PX);
-						if (typeof props.onResizeCommit === 'function') props.onResizeCommit();
-					},
-					style: {
-						flex: '0 0 auto',
-						height: 6,
-						cursor: 'ns-resize',
-						background: T.bgLayer2,
-						touchAction: 'none',
-					},
-				}),
-				h('div', {
-					key: 'bar',
-					style: {
-						display: 'flex',
-						alignItems: 'center',
-						gap: 8,
-						padding: '5px 10px',
-						background: T.bgLayer1,
-						borderBottom: '1px solid ' + T.borderL1,
-					},
-				}, [
-					h('span', { key: 'i', style: { display: 'flex', color: T.brand } }, h(CrystalIcon, { size: 13 })),
-					h('span', {
-						key: 't',
-						style: {
-							flex: 1,
-							minWidth: 0,
-							fontSize: 11.5,
-							color: T.labelSecondary,
-							overflow: 'hidden',
-							textOverflow: 'ellipsis',
-							whiteSpace: 'nowrap',
-						},
-					}, '只服务这个知识库'),
-				]),
-				h('div', {
-					key: 'body',
-					'data-dsh-obsidian-chat-surface': 'true',
-					style: {
-						flex: '1 1 auto',
-						width: '100%',
-						minWidth: 0,
-						minHeight: 0,
-						// Mirrors the shipped sidebar-chat root verbatim
-						// (`.root { width:100%; min-width:0; height:100%; min-height:0; display:flex }`):
-						// a ROW flex stretches its single child to the full height, which is
-						// what puts the conversation's composer at the BOTTOM. A column here
-						// sizes the conversation to its content instead, parking the composer
-						// at the top of the box.
-						display: 'flex',
-						overflow: 'hidden',
-					},
-				}, body),
 			]);
 		}
 
@@ -2706,36 +2635,6 @@ window.__ModuleLoader__.load({
 				return;
 			}
 
-			// The conversation box needs two services the notes panel does not:
-			// Sessions (to hold the vault's own Session) and Workspaces (to put it in
-			// the vault's Workspace — a Session created with only a `cwd` belongs to
-			// no Workspace, and the conversation then opens on the blank "new
-			// Session" screen asking which workspace to use).
-			//
-			// Both are reached through `ctx.get`, NOT as properties: neither is in
-			// `exports.inject`, and a service that is absent must cost the BOX only.
-			// Locking them into `inject` did the opposite — the whole entry failed to
-			// activate, `apply` never ran, and "the conversation is broken but the
-			// tree still works" was dead code that could never be reached.
-			const chatSessions = serviceOf(ctx, 'sessions');
-			const chatWorkspaces = serviceOf(ctx, 'workspaces');
-			const chatReady = chatSessions !== undefined
-				&& typeof chatSessions.create === 'function'
-				&& typeof chatSessions.retain === 'function'
-				&& chatWorkspaces !== undefined
-				&& typeof chatWorkspaces.create === 'function';
-			if (!chatReady) {
-				console.warn('[dsh-obsidian] Sessions or Workspaces are unavailable; the conversation box stays hidden');
-			} else {
-				// The panel's OWN seat, occupied by us. The shell's seat is left alone:
-				// it belongs to whichever sidebar-chat tab declares it (ui-subagent in
-				// this profile), and declaring it ourselves threw and cost the panel its
-				// body entirely.
-				guard('the panel seat occupant', () => ctx.slots.inject(PANEL_CHAT_SLOT, () => ctx.slots.register({
-					name: PANEL_CHAT_SLOT,
-				}, VaultConversation)));
-			}
-
 			// Stage one: what the tab type IS. `id` doubles as the body seat key.
 			guard('the notes tab type', () => ctx.effect(() => ctx.sidebarRightTabs.register({
 				id: TAB_ID,
@@ -2743,13 +2642,11 @@ window.__ModuleLoader__.load({
 				title: () => TAB_TITLE,
 			}), 'dsh-obsidian: notes tab type'));
 
-			// Stage two: the body, keyed by that id. Declaring the conversation child
-			// is what hands this body the render share its conversation box needs.
+			// Stage two: the body, keyed by that id.
 			guard('the notes panel', () => ctx.slots.inject(TAB_SLOT, () => ctx.slots.register({
 				name: TAB_SLOT,
 				key: TAB_ID,
-				children: { [PANEL_CHAT_SLOT]: { kind: 'single', scope: 'session' } },
-			}, guarded('知识库', makeNotesPanel(ctx, chatReady)))));
+			}, guarded('知识库', makeNotesPanel(ctx)))));
 
 			// Stage three: the row that opens it. This is the plugin's ONLY way in, so
 			// it is registered last of the three stages for the panel to be usable by
@@ -2775,23 +2672,14 @@ window.__ModuleLoader__.load({
 				},
 			}), 'dsh-obsidian: note tab type'));
 
-			// The note page's own seat. It must NOT reuse sidebar.chat.conversation:
-			// one entry per slot, and a second declaration throws inside apply, which
-			// makes the shell roll back EVERY registration this plugin made. A distinct
-			// name avoids that, and declaring it is also what EARNS this body the
-			// renderSlot and SessionProvider a conversation needs — the renderer grants
-			// both only to an entry that declares a session-scoped child.
+			// The note page's body, keyed by that id. It declares no child: the
+			// conversation is not this plugin's to lay out any more, so no surface here
+			// declares a seat, and `ConversationButton` hands the Session to the
+			// shell's own conversation panel instead.
 			guard('the note page', () => ctx.slots.inject(TAB_SLOT, () => ctx.slots.register({
 				name: TAB_SLOT,
 				key: NOTE_TAB_ID,
-				children: { [NOTE_CHAT_SLOT]: { kind: 'single', scope: 'session' } },
 			}, guarded('笔记页', makeNoteTab(ctx)))));
-
-			// Occupied here, after the body above declares it: a slot has to be declared
-			// before anything can register into it.
-			guard('the note page seat occupant', () => ctx.slots.inject(NOTE_CHAT_SLOT, () => ctx.slots.register({
-				name: NOTE_CHAT_SLOT,
-			}, VaultConversation)));
 
 			// There is deliberately no `sidebar.panellist` / `main` registration here.
 			// This plugin used to add a global panel icon for a full-width centre view
@@ -2821,13 +2709,10 @@ window.__ModuleLoader__.load({
 			// not an `@undefined` mention.
 			mentionInto,
 			ATTACH_MESSAGE,
-			getVaultChatInputActions: () => vaultChatInputActions,
-			VaultConversation,
-			FixedChatConversationView,
 			resolveVaultChatSession,
 			// The resolver memoises one promise for the whole page; a harness that
 			// needs to exercise a second resolution has to drop it first.
-			resetVaultChatSession: () => { vaultChatSession = undefined; },
+			resetVaultChatSession: () => { vaultChatTarget = undefined; },
 			noteAddress,
 			parseNoteAddress,
 			fileMention,
@@ -2836,8 +2721,6 @@ window.__ModuleLoader__.load({
 			TAB_KIND,
 			NOTE_TAB_ID,
 			NOTE_TAB_KIND,
-			PANEL_CHAT_SLOT,
-			NOTE_CHAT_SLOT,
 		};
 		return module.exports;
 	},

@@ -216,6 +216,10 @@ const workspaceCalls = []
 const retained = []
 const inserted = []
 const openedResources = []
+// Sessions the plugin asked the SHELL to show in the centre.
+const openedSessions = []
+// Right-Sidebar tabs it asked for (the surface it puts back after a Session switch).
+const openedTabKinds = []
 const declaredChildren = new Map()
 let chatWindow = { entries: [] }
 // The sessions service's own lookup for "does this Session exist". The resolver
@@ -254,11 +258,14 @@ const ctx = {
   get: (name) => {
     if (name === 'sessions') return sessionsService
     if (name === 'workspaces') return workspacesService
+    // The conversation is shown by the SHELL: this is the navigation the plugin asks
+    // for, and the only thing it has to get right is WHICH Session it names.
+    if (name === 'uiWorkspace') return { openSession: (target) => { openedSessions.push(target) } }
     return undefined
   },
   sidebarRightTabs: { register: () => () => {} },
   sidebarRight: {
-    openTab: () => {},
+    openTab: (kind) => { openedTabKinds.push(kind) },
     openResource: (address) => { openedResources.push(address) },
   },
   slots: {
@@ -317,8 +324,10 @@ const clickText = (label) => {
   node.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
 }
 
-// Props every panel occurrence needs: the conversation seat's render share, and
-// the input face the "attach this note" button writes into.
+// Props every panel occurrence needs: the input face the "quote this note" control
+// writes into. `renderSlot`/`SessionProvider` are still handed over because the shell
+// gives them to any body that declares a child slot — this plugin declares none, so it
+// never reads them, and their being here keeps that from mattering either way.
 const seatProps = {
   renderSlot: () => React.createElement('div', null, 'CONVERSATION_SEAT'),
   SessionProvider: (props) => props.children,
@@ -337,15 +346,23 @@ step('mount the tab body', async () => {
   }
 })
 
-step('the conversation box sits inside the panel, bound to the knowledge base', async () => {
-  const dock = host.querySelector('[data-dsh-obsidian-chat-dock]')
-  if (dock === null) throw new Error('the knowledge base panel has no conversation box')
-  if (dock.getAttribute('data-dsh-obsidian-chat-dock') !== 'ready') {
-    throw new Error('the box never became ready: ' + (host.textContent || '').slice(0, 140))
+step('the panel hands the vault conversation to the shell, which shows it in the centre', async () => {
+  // The tree panel hosts no conversation at all: not a footer, not a dialog, not a
+  // page. It offers the way to one — the shell's own conversation panel.
+  if (host.querySelector('[data-dsh-obsidian-chat-page]') !== null
+    || host.querySelector('[data-dsh-obsidian-chat-dock]') !== null) {
+    throw new Error('a conversation rendered inside the tree panel')
   }
-  // A Session created with only a `cwd` belongs to NO Workspace, and the
-  // conversation then opens on the blank "new Session" screen with a workspace
-  // picker — which is exactly the complaint. The Workspace must be resolved first.
+  const open = [...host.querySelectorAll('button')]
+    .find((button) => (button.textContent || '').trim() === '对话')
+  if (open === undefined) throw new Error('the panel has no control for the conversation')
+  openedSessions.length = 0
+  open.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  await flush()
+
+  // A Session created with only a `cwd` belongs to NO Workspace, and the conversation
+  // then opens on the blank "new Session" screen with a workspace picker — which is
+  // exactly the complaint. The Workspace is resolved BEFORE the Session is named.
   if (workspaceCalls.length !== 1) throw new Error('workspaces.create ran ' + workspaceCalls.length + ' time(s)')
   if (workspaceCalls[0].path !== 'D:\\知识库') {
     throw new Error('resolved a Workspace for ' + String(workspaceCalls[0].path) + ' instead of the vault')
@@ -355,43 +372,21 @@ step('the conversation box sits inside the panel, bound to the knowledge base', 
     throw new Error('the Session was not created inside the vault Workspace: ' + JSON.stringify(createdSessions[0]))
   }
   if (createdSessions[0].cwd !== 'D:\\知识库') throw new Error('the Session got the wrong cwd')
-  if (retained.length !== 1) throw new Error('the box retained ' + retained.length + ' Session(s)')
-  if (!host.textContent.includes('CONVERSATION_SEAT')) throw new Error('the conversation seat did not render')
-  if (!host.textContent.includes('只服务这个知识库')) throw new Error('the box lost its scope label')
-  // The conversation surface must be a ROW flex, like the shipped sidebar chat's
-  // root: that is what stretches the conversation to the box's full height and puts
-  // its composer at the BOTTOM. A column sizes it to its content and parks the
-  // composer at the top of the box, which reads as "the dialog is at the top".
-  const surface = host.querySelector('[data-dsh-obsidian-chat-surface]')
-  if (surface === null) throw new Error('the conversation box has no surface element')
-  if (surface.style.display !== 'flex') throw new Error('the conversation surface is not a flex box')
-  if (surface.style.flexDirection === 'column') {
-    throw new Error('the conversation surface is a column, which parks the composer at the top')
+  // And the SHELL is asked to show exactly that Session. It is the shell's panel that
+  // renders it, so nothing about this plugin's layout is involved.
+  if (openedSessions.length !== 1 || openedSessions[0] !== chatSessionId) {
+    throw new Error('the panel did not hand the vault Session to the shell: ' + JSON.stringify(openedSessions))
   }
-  if (surface.style.height === '' && surface.style.flex === '') {
-    throw new Error('the conversation surface cannot fill the box')
+  // Nothing was retained by the plugin: the shell holds the Session it displays.
+  if (retained.length !== 0) throw new Error('the plugin retained ' + retained.length + ' Session(s) of its own')
+  if (host.querySelector('[data-dsh-obsidian-chat-page]') !== null) {
+    throw new Error('opening the conversation changed the panel\'s own layout')
   }
-})
-
-step('the conversation box height is draggable and remembered', async () => {
-  const grip = host.querySelector('[data-dsh-obsidian-chat-grip]')
-  if (grip === null) throw new Error('the conversation box has no drag handle')
-  const dock = host.querySelector('[data-dsh-obsidian-chat-dock]')
-  const before = Number(String(dock.style.height).replace('px', ''))
-  if (!(before > 0)) throw new Error('the box has no height to drag: ' + dock.style.height)
-
-  // Drag the grip upward: the box must grow.
-  const pointer = (type, clientY) => new window.MouseEvent(type, { bubbles: true, cancelable: true, clientY })
-  grip.dispatchEvent(pointer('pointerdown', 300))
-  grip.dispatchEvent(pointer('pointermove', 240))
-  grip.dispatchEvent(pointer('pointerup', 240))
-  await flush()
-
-  const after = Number(String(dock.style.height).replace('px', ''))
-  if (!(after > before)) throw new Error('dragging up did not grow the box: ' + before + ' -> ' + dock.style.height)
-  const stored = window.localStorage.getItem('dsh-obsidian/chat-height')
-  if (stored !== String(Math.round(after))) {
-    throw new Error('the dragged height was not remembered: stored ' + String(stored) + ', box ' + after)
+  // Selecting another Session hands the right Sidebar a fresh tab set, so the panel
+  // the reader was looking at has to be put back: they asked to open a conversation,
+  // not to close the tree.
+  if (!openedTabKinds.includes(api.__internals.TAB_KIND)) {
+    throw new Error('opening the conversation left the notes tab closed: ' + JSON.stringify(openedTabKinds))
   }
 })
 
@@ -401,12 +396,22 @@ step('the first run asks which folder is the vault, and remembers the answer', a
   if (requests.some((url) => url.startsWith('/dsh-obsidian/tree'))) {
     throw new Error('the panel listed a folder before the reader agreed to one')
   }
+  const workspaceBefore = workspaceCalls.length
   clickText('使用这个库')
   await flush()
   if (vaultPosts.length !== 1) throw new Error('the chosen vault was not recorded')
   if (vaultPosts[0] !== 'D:\\知识库') throw new Error('recorded the wrong vault: ' + String(vaultPosts[0]))
   if (host.textContent.includes('先选择知识库文件夹')) throw new Error('the chooser stayed after a vault was chosen')
   if (!host.textContent.includes('笔记')) throw new Error('the tree did not load after choosing the vault')
+  // AND the workspace is registered right here, not left for the first 对话: the
+  // folder the reader just confirmed is what makes the vault a place the agent can be
+  // sent to, and what the sidebar lists.
+  if (workspaceCalls.length !== workspaceBefore + 1) {
+    throw new Error('choosing the vault did not register its Workspace (' + (workspaceCalls.length - workspaceBefore) + ' call(s))')
+  }
+  if (workspaceCalls[workspaceCalls.length - 1].path !== 'D:\\知识库') {
+    throw new Error('registered a Workspace for the wrong path: ' + String(workspaceCalls[workspaceCalls.length - 1].path))
+  }
 })
 
 step('the vault is read exactly once when it is agreed to', async () => {
@@ -585,6 +590,19 @@ step('the note page edits the file and saves it back', async () => {
   const textarea = container.querySelector('textarea')
   if (textarea === null) throw new Error('edit mode did not open an editor')
   if (textarea.value !== NOTE) throw new Error('the editor did not start from the file content')
+  // The editor must be the SAME box as the reading view. It used to be 13px monospace
+  // with its own padding, so pressing 编辑 reflowed the page before a character was
+  // typed — the mode change was the most visible thing about it.
+  if (textarea.style.fontSize !== '16px' || textarea.style.lineHeight !== '1.5') {
+    throw new Error('the editor does not match the reading view: '
+      + textarea.style.fontSize + ' / ' + textarea.style.lineHeight)
+  }
+  if (textarea.style.padding !== '18px 22px 96px') {
+    throw new Error('the editor keeps its own padding: ' + textarea.style.padding)
+  }
+  if (textarea.style.fontFamily !== 'inherit') {
+    throw new Error('the editor uses a different typeface: ' + textarea.style.fontFamily)
+  }
 
   const edited = '# 改过\n\n新内容\n'
   Simulate.change(textarea, { target: { value: edited } })
@@ -604,100 +622,6 @@ step('the note page edits the file and saves it back', async () => {
   if (container.querySelector('textarea') !== null) throw new Error('the editor did not close after saving')
 
   editRoot.unmount()
-  container.remove()
-})
-
-step('the conversation seat renders a real conversation, never the fallback', async () => {
-  const seat = registered.find((entry) => entry.metadata.name === api.__internals.PANEL_CHAT_SLOT)
-  if (seat === undefined) throw new Error('nothing occupies ' + api.__internals.PANEL_CHAT_SLOT)
-
-  const container = document.createElement('div')
-  document.body.appendChild(container)
-  const seatRoot = ReactDOMClient.createRoot(container)
-
-  // The phase decides which empty state the conversation shows. It is NEVER the
-  // Hero: the Hero is the "start a new Session" screen with a workspace picker,
-  // which is exactly what made the box read as a fresh conversation.
-  const cases = [
-    {
-      label: 'blank Session whose summary is known blank',
-      session: { blank: true, awaitingFirstTurn: true, running: false, openState: 'loading' },
-      conversation: { activeTargets: new Set() },
-      sessions: { byId: { 'session-vault-chat': { blank: true } } },
-      expected: 'active',
-    },
-    {
-      label: 'blank Session still loading its summary',
-      session: { blank: true, awaitingFirstTurn: true, running: false, openState: 'loading' },
-      conversation: { activeTargets: new Set() },
-      sessions: { byId: {} },
-      expected: 'settling',
-    },
-    {
-      label: 'Session with a live target',
-      session: { blank: false, awaitingFirstTurn: false, running: false, openState: 'open' },
-      conversation: { activeTargets: new Set(['chat']) },
-      sessions: { byId: {} },
-      expected: 'active',
-    },
-  ]
-
-  for (const testCase of cases) {
-    const calls = []
-    seatRoot.render(React.createElement(seat.component, {
-      sessionId: 'session-vault-chat',
-      useSession: (select) => select(testCase.session),
-      useConversation: (select) => select(testCase.conversation),
-      useSessions: (select) => select(testCase.sessions),
-      renderFactorySlot: (name, props, options) => {
-        calls.push({ name, props, options })
-        return React.createElement('div', null, 'real conversation')
-      },
-    }))
-    await flush()
-
-    if (calls.length !== 1) throw new Error(testCase.label + ': renderFactorySlot ran ' + calls.length + ' time(s)')
-    if (calls[0].name !== 'conversation.content') throw new Error(testCase.label + ': wrong factory ' + calls[0].name)
-    if (calls[0].props.variant !== 'embedded') throw new Error(testCase.label + ': not rendered embedded')
-    if (calls[0].props.hero !== false) throw new Error(testCase.label + ': the Hero was not suppressed')
-    if (calls[0].props.phase !== testCase.expected) {
-      throw new Error(testCase.label + ': expected phase ' + testCase.expected + ', got ' + calls[0].props.phase)
-    }
-    if (typeof calls[0].options?.slots?.views !== 'function') {
-      throw new Error(testCase.label + ': no views override')
-    }
-    if (!container.textContent.includes('real conversation')) {
-      throw new Error(testCase.label + ': the factory output never mounted')
-    }
-  }
-
-  // A throw inside this seat retires the whole tab body, so an unfamiliar
-  // snapshot must degrade instead of throwing. The stubs CALL the selector with a
-  // missing value (`() => undefined` never ran the selector, so the real throw path
-  // in `state.byId` went untested), and the factory is COUNTED: "degraded" in the
-  // text alone would also pass if the factory were rendered twice or the old text
-  // simply never left the DOM.
-  const broken = [
-    { useSession: (select) => select(undefined), useConversation: (select) => select(undefined), useSessions: (select) => select(undefined) },
-    { useSession: (select) => select({}), useConversation: (select) => select({}), useSessions: (select) => select({}) },
-    { useSession: (select) => select({ subagent: {} }), useConversation: (select) => select({ activeTargets: null }), useSessions: (select) => select({}) },
-  ]
-  for (const props of broken) {
-    let factoryRuns = 0
-    seatRoot.render(React.createElement(seat.component, {
-      ...props,
-      sessionId: 'session-vault-chat',
-      renderFactorySlot: () => {
-        factoryRuns += 1
-        return React.createElement('div', null, 'degraded')
-      },
-    }))
-    await flush()
-    if (!container.textContent.includes('degraded')) throw new Error('a broken snapshot did not reach the factory')
-    if (factoryRuns !== 1) throw new Error('a broken snapshot ran the factory ' + factoryRuns + ' time(s)')
-  }
-
-  seatRoot.unmount()
   container.remove()
 })
 
@@ -786,93 +710,87 @@ step('a remembered Session that no longer exists is replaced, not obeyed', async
   api.__internals.resetVaultChatSession()
 })
 
-step('the note page hosts the conversation and can send the note into it', async () => {
+step('the note page opens the conversation, and quotes the note into the conversation on screen', async () => {
   const noteBody = registered.find((entry) => entry.metadata.key === api.__internals.NOTE_TAB_ID)
-  const dockInserts = []
-  const dockActions = {
-    captureInsertion: () => ({ start: 0, end: 0, draftRev: 1 }),
-    insertText: (text) => { dockInserts.push(text); return true },
-  }
-
-  // The box's own composer belongs to the VAULT Session, so its actions can only
-  // be read from the seat's occupant. Render one to publish them.
-  const seat = registered.find((entry) => entry.metadata.name === api.__internals.PANEL_CHAT_SLOT)
-  const seatHost = document.createElement('div')
-  document.body.appendChild(seatHost)
-  const seatRoot = ReactDOMClient.createRoot(seatHost)
-  seatRoot.render(React.createElement(seat.component, {
-    sessionId: 'session-vault-chat',
-    useSession: (select) => select({ blank: false, awaitingFirstTurn: false, running: false, openState: 'open' }),
-    useConversation: (select) => select({ activeTargets: new Set(['chat']) }),
-    useSessions: (select) => select({ byId: {} }),
-    renderFactorySlot: () => React.createElement('div', null, 'seat'),
-    inputActions: dockActions,
-  }))
-  await flush()
-  if (api.__internals.getVaultChatInputActions() !== dockActions) {
-    throw new Error('the seat never published its composer actions')
-  }
 
   const container = document.createElement('div')
   document.body.appendChild(container)
   const noteRoot = ReactDOMClient.createRoot(container)
-  // The note page declares its OWN seat — it may not reuse the shell's, which the
-  // notes panel owns — and draws the conversation through it.
-  const seatCalls = []
   noteRoot.render(React.createElement(noteBody.component, {
     useTabInfo: () => ({ tab: { contentId: api.__internals.noteAddress('README.md') } }),
     inputActions: seatProps.inputActions,
-    SessionProvider: (props) => props.children,
-    renderSlot: (name) => {
-      seatCalls.push(name)
-      return React.createElement('div', null, 'NOTE_PAGE_CONVERSATION')
-    },
   }))
   await flush()
 
-  // The conversation exists on the note page too.
-  const dock = container.querySelector('[data-dsh-obsidian-chat-dock]')
-  if (dock === null) throw new Error('the note page has no conversation box')
-  if (dock.getAttribute('data-dsh-obsidian-chat-dock') !== 'ready') {
-    throw new Error('the note page conversation box never became ready')
+  // The note page renders no conversation: it carries the control that hands the
+  // vault Session to the shell, which shows it in the centre.
+  if (container.querySelector('[data-dsh-obsidian-chat-page]') !== null
+    || container.querySelector('[data-dsh-obsidian-chat-dock]') !== null) {
+    throw new Error('the note page rendered a conversation inline')
   }
-  if (seatCalls.length !== 1) throw new Error('the note page drew its seat ' + seatCalls.length + ' time(s)')
-  if (seatCalls[0] !== 'dsh-obsidian/note.conversation') {
-    throw new Error('the note page drew the wrong seat: ' + String(seatCalls[0]))
+  const openChat = [...container.querySelectorAll('button')]
+    .find((button) => (button.textContent || '').trim() === '对话')
+  if (openChat === undefined) throw new Error('the note page has no control for the conversation')
+
+  // There IS a remembered conversation by now, so the button does not decide for the
+  // reader: it asks. Silently resuming hides "start over"; silently starting over
+  // throws the history away.
+  openedSessions.length = 0
+  openChat.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  await flush()
+  if (openedSessions.length !== 0) throw new Error('the conversation opened without asking, although there was history')
+  const resume = [...container.querySelectorAll('button')]
+    .find((button) => (button.textContent || '').includes('继续上次对话'))
+  if (resume === undefined) throw new Error('the note page did not offer the remembered conversation')
+  const expectedSession = await api.__internals.resolveVaultChatSession(ctx)
+  resume.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  await flush()
+  if (openedSessions.length !== 1 || openedSessions[0] !== expectedSession) {
+    throw new Error('continuing did not hand the remembered Session to the shell: ' + JSON.stringify(openedSessions))
   }
-  if (!container.textContent.includes('NOTE_PAGE_CONVERSATION')) {
-    throw new Error('the note page conversation never reached the DOM')
+  // And the surface the reader was on is put back: the sidebar tab set is new, the note
+  // page is not.
+  if (!openedResources.includes(api.__internals.noteAddress('README.md'))) {
+    throw new Error('the note page was not restored after the Session switch')
   }
 
-  // "Send to this conversation" targets the box, NOT the main conversation.
-  const dockButton = [...container.querySelectorAll('button')]
-    .find((button) => (button.textContent || '').includes('发到本栏'))
-  if (dockButton === undefined) throw new Error('no control for sending to this conversation')
-  dockInserts.length = 0
-  inserted.length = 0
-  dockButton.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  // "新开一个对话" creates a real new Session in the vault Workspace, remembers it,
+  // and shows THAT one — the old id is replaced only after the new one exists.
+  createdSessions.length = 0
+  const chatPostsBefore = posts.filter((entry) => entry.url === '/dsh-obsidian/chat').length
+  openedSessions.length = 0
+  openChat.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
   await flush()
-  if (dockInserts.length !== 1) throw new Error('the mention did not reach the panel conversation')
-  if (inserted.length !== 0) throw new Error('it went to the main conversation instead')
-  if (dockInserts[0] !== ' @D:/知识库/README.md ') {
-    throw new Error('wrong mention for the panel conversation: ' + JSON.stringify(dockInserts[0]))
+  const fresh = [...container.querySelectorAll('button')]
+    .find((button) => (button.textContent || '').includes('新开一个对话'))
+  if (fresh === undefined) throw new Error('the note page did not offer a fresh conversation')
+  fresh.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  await flush()
+  if (createdSessions.length !== 1) throw new Error('a fresh conversation created ' + createdSessions.length + ' Session(s)')
+  if (createdSessions[0].workspaceId !== 'ws-vault') {
+    throw new Error('the fresh conversation was not created in the vault Workspace: ' + JSON.stringify(createdSessions[0]))
   }
+  if (openedSessions.length !== 1 || openedSessions[0] !== chatSessionId) {
+    throw new Error('the fresh conversation was not the one shown: ' + JSON.stringify(openedSessions))
+  }
+  const chatPosts = posts.filter((entry) => entry.url === '/dsh-obsidian/chat').length
+  if (chatPosts !== chatPostsBefore + 1) throw new Error('the fresh Session id was not remembered')
 
-  // And the main-conversation control still targets the other one.
-  const mainButton = [...container.querySelectorAll('button')]
-    .find((button) => (button.textContent || '').includes('发到主对话'))
-  if (mainButton === undefined) throw new Error('no control for sending to the main conversation')
-  dockInserts.length = 0
+  // Quoting the note targets the conversation the centre is showing — the
+  // `inputActions` a tab body receives belong to the Session whose Sidebar this is.
+  const quote = [...container.querySelectorAll('button')]
+    .find((button) => (button.textContent || '').includes('引用到对话'))
+  if (quote === undefined) throw new Error('no control for quoting the note into the conversation')
   inserted.length = 0
-  mainButton.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  quote.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
   await flush()
-  if (inserted.length !== 1) throw new Error('the main conversation never received the mention')
-  if (dockInserts.length !== 0) throw new Error('the main control wrote into the panel conversation')
+  if (inserted.length !== 1) throw new Error('the mention never reached a composer')
+  if (inserted[0] !== ' @D:/知识库/README.md ') {
+    throw new Error('wrong mention: ' + JSON.stringify(inserted[0]))
+  }
 
   noteRoot.unmount()
-  seatRoot.unmount()
   container.remove()
-  seatHost.remove()
 })
 
 step('the notes launcher opens the notes tab', async () => {
@@ -945,18 +863,36 @@ step('a profile without Sessions still gets the tree, only not the box', async (
   if (!captured.some((entry) => entry.metadata.name === 'sidebar.footer.action')) {
     throw new Error('the way into the panel vanished when Sessions were missing')
   }
-  if (captured.some((entry) => entry.metadata.name === api.__internals.PANEL_CHAT_SLOT)) {
-    throw new Error('a conversation seat was occupied with no Sessions to bind it')
-  }
   const container = document.createElement('div')
   document.body.appendChild(container)
   const bareRoot = ReactDOMClient.createRoot(container)
   bareRoot.render(React.createElement(panel.component, seatProps))
   await flush()
   if (container.querySelector('input') === null) throw new Error('the tree panel did not mount without Sessions')
-  if (container.querySelector('[data-dsh-obsidian-chat-dock]') !== null) {
-    throw new Error('the conversation box mounted without Sessions to bind it')
+  if (container.querySelector('[data-dsh-obsidian-chat-page]') !== null) {
+    throw new Error('a conversation mounted inside the tree panel')
   }
+
+  // Asking for the conversation here must SAY that it cannot be shown, rather than
+  // doing nothing: `uiWorkspace` is reached through `ctx.get`, so its absence is a
+  // message and not a crash, and the tree is untouched either way. If a Session is
+  // remembered the button asks first — the missing navigator is reported either way,
+  // and the tree survives both paths.
+  const open = [...container.querySelectorAll('button')]
+    .find((button) => (button.textContent || '').trim() === '对话')
+  if (open === undefined) throw new Error('the panel lost its way into the conversation')
+  open.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  await flush()
+  const resume = [...container.querySelectorAll('button')]
+    .find((button) => (button.textContent || '').includes('继续上次对话'))
+  if (resume !== undefined) {
+    resume.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+    await flush()
+  }
+  if (!container.textContent.includes('没有会话导航')) {
+    throw new Error('a missing navigator was not reported: ' + (container.textContent || '').slice(0, 140))
+  }
+  if (container.querySelector('input') === null) throw new Error('the tree was lost while asking for the conversation')
   bareRoot.unmount()
   container.remove()
 })

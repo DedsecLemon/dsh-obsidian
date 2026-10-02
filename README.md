@@ -26,8 +26,9 @@ overwrote it would silently change which folder the user's plugin reads.
 A DeepSeek Harness **bundle** that puts an Obsidian vault in the app's **right
 Sidebar**: a `知识库` (Knowledge Base) tab with the vault tree and full-vault search, a note page
 that renders Markdown the way Obsidian's reading view does and lets you edit the
-file in place, and — at the foot of the same panel — a conversation with an agent
-whose Session lives in the vault's own Workspace.
+file in place, and a conversation with an agent whose Session lives in the vault's
+own Workspace — opened in the app's own conversation panel, so the sidebar keeps
+its space.
 
 **It writes to the vault, and that is exactly one narrow path.** `POST
 /dsh-obsidian/note` overwrites one *existing* note, and only when the path
@@ -42,7 +43,7 @@ vault; the conversation Session id is DSH's own bookkeeping and lives under
 | Surface | Kind | Where |
 |---|---|---|
 | Panel body | Client slot | `sidebar.right.pane.tab`, keyed `dsh-obsidian/notes` |
-| Conversation box | Client slot | a child of the panel body, rendered into `dsh-obsidian/panel.conversation` |
+| Conversation | Shell panel | opened with `uiWorkspace.openSession(vault Session)` — `对话` in the tree panel and on the note page |
 | Conversation seat occupant | Client slot | `dsh-obsidian/panel.conversation`, and `dsh-obsidian/note.conversation` on the note page |
 | Note page body | Client slot | `sidebar.right.pane.tab`, keyed `dsh-obsidian/note` — also declares its own conversation child |
 | Note outline | Client UI | the note page's `大纲` panel, anchored to the `dsh-obsidian-outline-*` ids `renderMarkdown` puts on headings |
@@ -83,10 +84,10 @@ the real Obsidian one click away through the `obsidian_open` route/tool.
 
 ## The vault conversation
 
-A real agent conversation sits at the foot of the `知识库` panel — not in a tab of
-its own, and not on the "start a new Session" screen. It is one Session that is
-created on first use and reused afterwards, so a plan survives a reload and can be
-refined across days.
+A real agent conversation is opened in the centre as an ordinary Session whose Workspace
+is the vault — not a tab of the shell's chat, and not on the "start a new Session"
+screen. It is one Session that is created on first use and reused afterwards, so a plan
+survives a reload and can be refined across days.
 
 **It has to belong to the vault's Workspace, not merely to its directory.** This
 is the part that is easy to get wrong, and getting it wrong is visible: a Session
@@ -97,25 +98,21 @@ the blank new-Session screen with a workspace picker, and the whole thing reads 
 an existing path, so the vault's Workspace is never registered twice — and passes
 the resulting `workspaceId` (plus `cwd`) to `ctx.sessions.create`.
 
-**The Hero is suppressed.** `VaultConversation` always passes `hero: false`. The
-Hero is the "start a new Session" screen — headline, workspace picker, agent
-preset — and this box is none of those things.
-
-**Nothing about the conversation UI is reimplemented.** The shell has a seat for
-exactly this: `sidebar.chat.conversation` renders the shared
-`conversation.content` factory for the Session it is given. The panel body declares
-that seat as a child, and this plugin **occupies it**:
+**Nothing about the conversation UI is reimplemented, and no seat is occupied.** The
+app already has one good place for a conversation and one panel that renders it: the
+centre, whose `main` key `conversation` hosts the shipped Conversation. `对话` therefore
+does not mount anything of ours — it selects the vault's Session through
+`uiWorkspace.openSession(sessionId)` and the shell draws it:
 
 ```js
-ctx.slots.register({ name: 'sidebar.chat.conversation' }, VaultConversation)
+navigator.openSession(sessionId)   // ctx.get('uiWorkspace')
 ```
 
-Occupying it is not optional. The shipped occupant belongs to ui-subagent's
-sidebar chat, and that is **not registered in every profile** — in this deployment
-the seat existed with `occupants: []`, so the box rendered a fallback. Depending on
-a sibling to have registered one was the bug; `VaultConversation` carries the
-shipped panel's own logic so the result matches the subagent chat tab rather than
-approximating it.
+That is also why this plugin declares **no slot children**: an earlier version declared a
+conversation seat on two of its own surfaces (and, before that, tried to occupy
+`sidebar.chat.conversation`, which ui-subagent owns — a second declaration throws inside
+`apply` and the shell rolls back every registration the plugin made). Declaring nothing
+costs nothing and cannot collide.
 
 **Handoff is about files, not about the AI's plan.** A note is "dropped into" a
 conversation by inserting its `@path` mention at the caret —
@@ -169,52 +166,94 @@ file; `保存` posts the whole text to `/dsh-obsidian/note`. A note whose read w
 truncated is refused editing outright — the partial view is not a safe base for
 overwriting the file.
 
-**Sending a note into a conversation.** There are two controls, because there are
-two conversations. `发到本栏` inserts the mention into the conversation box at the
-foot of this panel; `发到主对话` inserts it into the centre conversation.
+**Quoting a note into the conversation.** One control, because there is one place the
+mention can land: `引用到对话` inserts the note's absolute `@path` at the caret of the
+conversation the centre is showing — the same thing dragging the file in would do. The
+path is ABSOLUTE because the receiving conversation's Workspace need not be the vault: a
+relative mention would resolve against the wrong root. An unknown vault root is a refusal
+(`no-path`), never an `@undefined` mention.
 
-The first one is the interesting case. The standard `inputActions` a tab body
-receives belong to the Session **whose Sidebar this is** — the main conversation —
-so a tab body cannot reach the box's composer by any ordinary prop. The box's
-composer belongs to the vault Session, and the only place its actions exist is the
-seat's own occupant, which renders inside the box's `SessionProvider`. So
-`VaultConversation` publishes `inputActions` to a module-level handle and the
-control reads it at click time. `mount-check` asserts both controls target their
-own conversation and never cross.
+There is no second composer to reach for any more, which is why this is one control and
+not two: the vault conversation is simply the Session the reader opened from `对话`.
+`mount-check` asserts the click hands that Session to the shell and that the quote lands
+in the composer the page was given.
 
-## The conversation box: the reader sets its height
+## The conversation: opened in the centre, hosted by the shell
 
-The box is pinned to the pane's foot and its height is **the reader's**, dragged on
-the 6px grip along its top edge and remembered in `localStorage` (double-click the
-grip to restore the default). It is deliberately NOT derived from the pane: guessing
-a proportion put the box in the wrong place twice, and only the reader knows how much
-of the pane the notes above deserve today.
+The conversation is an ordinary DSH Session — one whose Workspace is the vault — and
+`对话` hands it to the app: `uiWorkspace.openSession(sessionId)` selects it, and the
+centre shows it in the shell's own conversation panel. This plugin renders none of it,
+and none of it touches the right Sidebar's layout: the tree and the note stay visible
+beside it, and the plugin's own chrome is one button.
 
-The clamp needs the pane's real box, so the hook takes a ref to it and falls back to
-a fixed height when there is no layout to measure (before mount, or in a harness).
-Its `latest` ref is written **inside `resize`, not during render** — pointermove and
-pointerup can both run before React re-renders, so a render-time ref would still hold
-the previous height when the drag ends and would persist the wrong number.
-`mount-check` drags the grip and asserts both the new height and what was stored.
+That is the whole design, and it is the answer to a question this plugin got wrong three
+times. A right-Sidebar pane is a few hundred pixels of tool space, so a conversation put
+there has two possible shapes and both are wrong: it either eats the tree's height (the
+old footer, then the draggable popup) or replaces it (a tab of its own). Either way the
+plugin has to invent a size for something the reader uses in bursts, next to a column
+whose whole job is showing the vault. The centre is where the app puts conversations: it
+is full width, it already has the composer, the transcript, the stop control and the
+rest, and the Session is host-side — so opening and closing this view costs the
+conversation nothing.
 
-It also appears on the **note page**, because reading a note and talking about it
-are the same act. Both surfaces show the same Session and share the same remembered
-height, so it is one conversation seen from two places.
+Two consequences worth stating:
 
-**The box's inner surface must be a ROW flex.** This is not cosmetic — it is what
-puts the composer at the bottom. The shipped sidebar chat wraps its seat in the CSS
-module rule
+- **This plugin now declares no slot children at all.** It used to declare a conversation
+  seat of its own on two surfaces, which meant owning a second copy of a conversation's
+  state and keeping it fed. There is nothing of ours to collide with
+  `sidebar.chat.conversation` (ui-subagent owns that one in this profile) and nothing to
+  keep alive.
+- **`引用到对话` on the note page writes into the conversation on screen.** The
+  `inputActions` a tab body receives belong to the Session whose Sidebar this is — the
+  one the centre is showing — so quoting a note puts its absolute `@path` into whatever
+  conversation is open, which is the vault conversation whenever the reader arrived
+  through `对话`. Nothing is published module-side any more, because there is no second
+  composer to reach.
 
-```css
-.root { width: 100%; min-width: 0; height: 100%; min-height: 0; display: flex }
+### Continue, or start over
+
+The remembered Session is the one holding the history, so "open the vault conversation"
+should mean that one — which is what the button used to do, silently. That made the
+other intention (start fresh) impossible without hunting through the workspace, and the
+opposite mistake (always starting a new one) throws the history away. So `对话` resolves
+first and *asks* when there is something to come back to:
+
+```
+继续上次对话   回到知识库里的那段历史
+新开一个对话   同一工作区，从空白开始
 ```
 
-A row flex stretches its single child to the container's full height, so the
-conversation fills the box and its composer lands at the foot. Writing
-`flex-direction: column` there instead sizes the conversation to its *content*, so
-the composer parks at the TOP of the box — which reads exactly as "the chat box is at
-the top of the sidebar". `mount-check` asserts the surface is a flex row, so this
-cannot silently regress.
+No remembered Session means no menu: the first use creates one and opens it. "New" is a
+real new Session in the vault's Workspace, and the remembered id is replaced only after
+that Session exists — a failure leaves the history addressable.
+
+### The workspace appears when the folder is chosen
+
+The vault's Workspace is registered the moment the reader confirms a folder, not on the
+first `对话`. The Workspace is what makes the folder a place the agent can be sent to and
+what the sidebar lists, so resolving it lazily meant nothing appeared until the reader
+went looking for the conversation. `workspaces.create` is idempotent by contract, so the
+lazy path in `resolveVaultChatTarget` still works and costs nothing when the Workspace is
+already there.
+
+### The sidebar comes back
+
+The right Sidebar's tabs are **session-scoped**, so selecting another Session hands the
+pane a fresh, empty tab set: the tree — or the note page the reader was on — disappeared
+with the Session it belonged to. Opening a conversation is not closing the tree, so the
+plugin remembers which of its surfaces was on screen (`rememberSurface`) and puts it back
+after `openSession` (`restoreSurface`), retrying briefly because the pane remounts for
+the new Session. The tree's own browse state — expansion, selection, search text, the
+levels already fetched — is kept across that remount too, because it is the same vault;
+it is dropped outright if the vault turns out to be a different one.
+
+### Editing looks like reading
+
+`编辑` swaps the rendered page for a `textarea` over the same file, and the two have to
+be the same box: 16px on 1.5, the same `18px 22px 96px` padding, the same typeface. The
+editor used to be 13px monospace with its own padding, so pressing the button reflowed
+the page before a character was typed, and the mode change was the most visible thing
+about it. `mount-check` asserts the editor's metrics against the reading view's.
 
 ## One slot, one declarer — and why that took the whole plugin down
 
@@ -253,14 +292,15 @@ its own: without `SessionProvider` the factory has no session scope to render, w
 is why a factory-only note page showed "no seat and no factory" instead of a
 conversation.
 
-`VaultConversation` occupies **both** seats: it renders whichever Session its
-`SessionProvider` binds, so one component covers both surfaces.
+That is the mechanism an earlier version used to host a conversation of its own. The
+current plugin declares no child slot, so it never receives `renderSlot`/`SessionProvider`
+— and does not need them: the vault conversation is drawn by the shell's Conversation
+panel, which the plugin reaches by Session id.
 
-Both client harnesses now mirror the slots core's rule and **throw on a second
-declaration**, and `render-check` proves the guard is live by trying to declare the
-seat twice, then asserts the note page uses its own seat name and that both seats
-have an occupant. A silent guard would be worse than none: this is the outage they
-failed to catch the first time.
+Both client harnesses mirror the slots core's rule and **throw on a second declaration**,
+and `render-check` proves the guard is live by declaring the same seat twice, then asserts
+that this plugin declares no child slot at all. A silent guard would be worse than none:
+this is the outage they failed to catch the first time.
 
 ## Why a remembered Session always wins
 
@@ -294,8 +334,9 @@ than one.
 ## Why the panel stacks vertically
 
 A right-Sidebar pane is a few hundred pixels wide, so the panel keeps one column:
-the body shows the tree (or live search results), and the conversation box is a
-strip beneath it. A note never takes this column over — it opens as its own page.
+the body shows the tree (or live search results). A note never takes this column
+over — it opens as its own page — and the conversation is not in this column at all:
+the shell shows it in the centre. Nothing here competes for the pane's height.
 The harness asserts the vertical stack, so a future edit that reintroduces
 side-by-side columns fails the test rather than the layout.
 
@@ -422,8 +463,8 @@ hostage to a directory that has nothing to do with this plugin — and which was
 then deleted out from under them.
 
 `mount-check.cjs` exists because server rendering is not enough. It walks the
-panel through mount → tree → expand → note → outline → back → search → the
-conversation box → launcher with effects actually running. The first version of
+panel through mount → tree → expand → note → outline → conversation → back → search →
+launcher with effects actually running. The first version of
 this plugin used a
 `const` above its own declaration: the throw happened inside a passive mount
 effect, which SSR never executes, and the slot framework's entry boundary
