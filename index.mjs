@@ -10,7 +10,7 @@
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { basename, dirname, join, relative, resolve, sep } from 'node:path'
+import { basename, dirname, join, posix, relative, resolve, sep, win32 } from 'node:path'
 
 export const name = 'dsh-obsidian-panel'
 
@@ -70,24 +70,78 @@ const VAULT_LOOK_DEPTH = 2
  */
 const DIAG_KEYS = ['inject', 'report', 'renderError']
 
-/** Absolute paths worth trying when the config does not name an executable. */
-function candidateApps() {
-  const local = process.env.LOCALAPPDATA
-  const pf = process.env.ProgramFiles
-  const pf86 = process.env['ProgramFiles(x86)']
-  return [
-    process.env.DSH_OBSIDIAN_APP,
-    local ? join(local, 'Obsidian', 'Obsidian.exe') : undefined,
-    local ? join(local, 'Programs', 'Obsidian', 'Obsidian.exe') : undefined,
-    pf ? join(pf, 'Obsidian', 'Obsidian.exe') : undefined,
-    pf86 ? join(pf86, 'Obsidian', 'Obsidian.exe') : undefined,
-  ].filter(candidate => typeof candidate === 'string' && candidate !== '')
+/**
+ * Absolute paths worth trying when the config does not name an executable.
+ *
+ * Split by platform because Obsidian installs itself in a different place on each one.
+ * `platform`, `env` and `home` are parameters rather than globals so `test/platform-check.mjs`
+ * can assert all three lists from any single machine — a path list that nobody can test on
+ * the platform it exists for is how the macOS and Linux cases silently rot.
+ *
+ * `DSH_OBSIDIAN_APP` comes first on every platform: an explicit answer outranks a guess.
+ */
+function candidateApps(platform = process.platform, env = process.env, home = homedir()) {
+  // Join with the TARGET platform's separator, not the host's: the lists describe where
+  // Obsidian lives on that system, and a Windows host asking for the Linux list must still
+  // produce POSIX paths (which is also what makes all three testable from one machine).
+  const joinFor = platform === 'win32' ? win32.join : posix.join
+  const configured = typeof env.DSH_OBSIDIAN_APP === 'string' && env.DSH_OBSIDIAN_APP !== ''
+    ? env.DSH_OBSIDIAN_APP
+    : undefined
+  const lists = {
+    win32: [
+      configured,
+      env.LOCALAPPDATA ? joinFor(env.LOCALAPPDATA, 'Obsidian', 'Obsidian.exe') : undefined,
+      env.LOCALAPPDATA ? joinFor(env.LOCALAPPDATA, 'Programs', 'Obsidian', 'Obsidian.exe') : undefined,
+      env.ProgramFiles ? joinFor(env.ProgramFiles, 'Obsidian', 'Obsidian.exe') : undefined,
+      env['ProgramFiles(x86)'] ? joinFor(env['ProgramFiles(x86)'], 'Obsidian', 'Obsidian.exe') : undefined,
+    ],
+    darwin: [
+      configured,
+      '/Applications/Obsidian.app/Contents/MacOS/Obsidian',
+      home ? joinFor(home, 'Applications', 'Obsidian.app', 'Contents', 'MacOS', 'Obsidian') : undefined,
+    ],
+    linux: [
+      configured,
+      realHome(home) ? joinFor(realHome(home), '.local', 'bin', 'Obsidian.AppImage') : undefined,
+      realHome(home) ? joinFor(realHome(home), 'Applications', 'Obsidian.AppImage') : undefined,
+      '/usr/bin/obsidian',
+      '/usr/local/bin/obsidian',
+      '/snap/bin/obsidian',
+      '/var/lib/flatpak/exports/bin/md.obsidian.Obsidian',
+      realHome(home) ? joinFor(realHome(home), '.local', 'share', 'flatpak', 'exports', 'bin', 'md.obsidian.Obsidian') : undefined,
+    ],
+  }
+  const candidates = lists[platform] ?? lists.linux
+  return candidates.filter(candidate => typeof candidate === 'string' && candidate !== '')
 }
 
-/** `%APPDATA%\obsidian\obsidian.json` — Obsidian's own vault registry. */
-function configPath() {
-  const appdata = process.env.APPDATA
-  return appdata ? join(appdata, 'obsidian', 'obsidian.json') : undefined
+/** `$HOME`, or nothing when there is not one to join onto. */
+function realHome(home) {
+  return typeof home === 'string' && home !== '' ? home : undefined
+}
+
+/**
+ * Obsidian's own vault registry — the first-run *guess*, never the answer:
+ *
+ *   Windows  `%APPDATA%\obsidian\obsidian.json`
+ *   macOS    `~/Library/Application Support/obsidian/obsidian.json`
+ *   Linux    `$XDG_CONFIG_HOME/obsidian/obsidian.json` (default `~/.config/...`)
+ */
+function configPath(platform = process.platform, env = process.env, home = homedir()) {
+  const joinFor = platform === 'win32' ? win32.join : posix.join
+  if (platform === 'win32') {
+    return typeof env.APPDATA === 'string' && env.APPDATA !== ''
+      ? joinFor(env.APPDATA, 'obsidian', 'obsidian.json')
+      : undefined
+  }
+  if (platform === 'darwin') {
+    return realHome(home) ? joinFor(realHome(home), 'Library', 'Application Support', 'obsidian', 'obsidian.json') : undefined
+  }
+  const configHome = typeof env.XDG_CONFIG_HOME === 'string' && env.XDG_CONFIG_HOME !== ''
+    ? env.XDG_CONFIG_HOME
+    : (realHome(home) ? joinFor(realHome(home), '.config') : undefined)
+  return configHome === undefined ? undefined : joinFor(configHome, 'obsidian', 'obsidian.json')
 }
 
 /**
@@ -672,10 +726,17 @@ async function openObsidian(ctx, file) {
     return { opened: true, uri, vault: target.vaultName ?? '', app: resolved, via: 'executable' }
   }
 
-  // No configured executable: let Windows resolve the registered obsidian:// handler.
-  const shell = await subprocess.resolveExecutable('cmd.exe')
+  // No configured executable: hand the URI to the platform's own protocol handler, which
+  // is what the reader's default-browser-style registration is for. Windows needs a
+  // shell (`start`), macOS and Linux both ship an opener.
+  const platform = process.platform
+  const opener = platform === 'win32'
+    ? { argv: [await subprocess.resolveExecutable('cmd.exe'), '/c', 'start', '', uri] }
+    : platform === 'darwin'
+      ? { argv: [await subprocess.resolveExecutable('open'), uri] }
+      : { argv: [await subprocess.resolveExecutable('xdg-open'), uri] }
   const handle = subprocess.spawn({
-    argv: [shell, '/c', 'start', '', uri],
+    argv: opener.argv,
     cwd,
     stdio: { stdin: 'ignore', stdout: 'ignore', stderr: 'ignore' },
     graceMs: 3000,
@@ -762,6 +823,19 @@ function allowMethod(req, res) {
   return false
 }
 
+/**
+ * Pure internals a harness may pin directly.
+ *
+ * The same idea as the client half's `exports.__internals`: the path resolution the routes
+ * are built on, exposed so `test/platform-check.mjs` can assert **every** platform's
+ * candidate list and registry path from one machine.
+ */
+export const __internals = Object.freeze({ candidateApps, configPath })
+
+/**
+ * Register the plugin's routes and tool against the host.
+ * @param ctx - plugin context.
+ */
 export function apply(ctx) {
   ctx.inject(['webServer'], (http) => {
     http.webServer.register({

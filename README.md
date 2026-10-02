@@ -31,6 +31,7 @@ are `dsh-obsidian/*`, and the app label is `知识库`.
 |---|---|
 | DSH | `^0.2.0-rc.2` — verified on **0.2.0-rc.2** |
 | Node.js | `>=22.12.0` — only stable `node:` APIs; tested on 22.12.0 |
+| Systems | **Windows, macOS, Linux** (`os`). Obsidian itself is found per platform — `/Applications` and `~/Applications` on macOS, AppImage/`/usr/bin`/`/usr/local/bin`/snap/flatpak on Linux, the usual per-user and machine-wide installs on Windows — and `DSH_OBSIDIAN_APP` overrides every one of them. Vault detection reads Obsidian's own registry where that platform keeps it. `test/platform-check.mjs` asserts all three lists. **Run on Windows so far**: the macOS and Linux lists are asserted, and only the Windows list has been exercised against a real Obsidian |
 | Profile | `web` (`dsh.client.platform`), i.e. any profile with a client half |
 | Per-release | `dsh.compatibility.dshReleases` in `package.json`. Only `0.2.0-rc.2` is `compatible`; anything else is `unknown` until somebody runs it — that is what the field means |
 | Install / start / uninstall | verified against the packed tarball in a **disposable profile**: [docs/LIFECYCLE.md](docs/LIFECYCLE.md) |
@@ -57,7 +58,7 @@ leaving them to be discovered:
 | **commands** | Opening Obsidian goes through the **host's own subprocess service** — the plugin never imports `node:child_process` and never builds a shell string. It happens only when you click 在 Obsidian 中打开 |
 | **credentials** | **None.** The marketplace scanner flags *any* `process.env` read as a credentials signal; this plugin reads `APPDATA`, `LOCALAPPDATA`, `ProgramFiles`, `ProgramFiles(x86)`, `DSH_HOME` and `DSH_OBSIDIAN_APP` — environment **paths**. No tokens, no API keys, no cookies, no OAuth |
 | **dependencies** | No runtime dependencies (`dependencies` is empty). `jsdom`/`react`/`react-dom` are dev-only, for the harnesses |
-| **external services** | The Obsidian desktop app — optional, only for "open in Obsidian" — and the DSH host it runs inside |
+| **external services** | The Obsidian desktop app — optional, only for "open in Obsidian" — and the DSH host it runs inside. Opening a note hands Obsidian's `obsidian://` URI to the platform's own handler (`start` on Windows, `open` on macOS, `xdg-open` on Linux) |
 
 Failure bounds — the plugin degrades in pieces rather than half-registering:
 
@@ -68,6 +69,7 @@ Failure bounds — the plugin degrades in pieces rather than half-registering:
 | `uiWorkspace` | no folder picker and no conversation navigation; the vault path can still be set from the panel |
 | the host's `webServer` | no routes register, so the panel has no data to show |
 | Obsidian is not installed | only "open in Obsidian" is unavailable (the `obsidian://` protocol handler is still tried) |
+| Obsidian is somewhere unusual | set `DSH_OBSIDIAN_APP` to its absolute path — that outranks every discovered location on every platform |
 | the vault was moved or deleted | the tree shows the error and asks for a folder again — a failed read is never cached as "empty" |
 
 Because `files` and `network` are genuinely used, a marketplace that grants **automatic**

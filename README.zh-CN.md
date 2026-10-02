@@ -29,6 +29,7 @@ slot 键是 `dsh-obsidian/*`,界面上的名字是 `知识库`。
 |---|---|
 | DSH | `^0.2.0-rc.2` —— 已在 **0.2.0-rc.2** 上验证 |
 | Node.js | `>=22.12.0` —— 只用稳定的 `node:` API,实测 22.12.0 |
+| 系统 | **Windows / macOS / Linux**(`os`)。Obsidian 按平台各自查找:macOS 找 `/Applications` 与 `~/Applications`,Linux 找 AppImage、`/usr/bin`、`/usr/local/bin`、snap、flatpak,Windows 找常见的用户级与全局安装;`DSH_OBSIDIAN_APP` 可以覆盖以上全部。知识库探测则读取该平台 Obsidian 自己的注册表。三份路径清单由 `test/platform-check.mjs` 断言。**目前只在 Windows 上实跑过**:macOS/Linux 的清单是被断言过的,还没对着真实的 Obsidian 跑过 |
 | Profile | `web`(`dsh.client.platform`),即任何带客户端半的 profile |
 | 逐版本声明 | `package.json` 里的 `dsh.compatibility.dshReleases`。只有 `0.2.0-rc.2` 是 `compatible`,其余是 `unknown` —— 直到有人真的跑过,这个字段就是这个意思 |
 | 安装/启动/卸载 | 已用**打包产物**在**一次性 profile** 里验证:[docs/LIFECYCLE.md](docs/LIFECYCLE.md) |
@@ -54,7 +55,7 @@ node test/host-check.mjs           # 全部 HTTP 路由 + 安全边界
 | **commands** | 打开 Obsidian 走的是**宿主自己的 subprocess 服务** —— 插件从不 import `node:child_process`,也不拼 shell 字符串。只在你点「在 Obsidian 中打开」时发生 |
 | **credentials** | **没有。** 商城的扫描器把**任何** `process.env` 读取都算作 credentials 信号;本插件读的是 `APPDATA`、`LOCALAPPDATA`、`ProgramFiles`、`ProgramFiles(x86)`、`DSH_HOME`、`DSH_OBSIDIAN_APP` —— 这些都是**环境路径**。没有 token、没有 API key、没有 cookie、没有 OAuth |
 | **依赖** | 无运行时依赖(`dependencies` 为空)。`jsdom`/`react`/`react-dom` 只给 harness 用 |
-| **外部服务** | Obsidian 桌面应用(可选,只影响「在 Obsidian 中打开」)+ 它所运行的 DSH 宿主 |
+| **外部服务** | Obsidian 桌面应用(可选,只影响「在 Obsidian 中打开」)+ 它所运行的 DSH 宿主。打开笔记时把 Obsidian 的 `obsidian://` URI 交给**该平台自己的**处理器(Windows `start`、macOS `open`、Linux `xdg-open`) |
 
 失败边界 —— 缺东西时是**成块地退化**,而不是注册到一半:
 
@@ -65,6 +66,7 @@ node test/host-check.mjs           # 全部 HTTP 路由 + 安全边界
 | `uiWorkspace` | 没有文件夹选择器、也无法导航到对话;知识库路径仍可在面板里手动设置 |
 | 宿主的 `webServer` | 路由注册不上,面板没有数据 |
 | 本机没装 Obsidian | 只有「在 Obsidian 中打开」不可用(仍会尝试 `obsidian://` 协议处理器) |
+| Obsidian 装在非常规位置 | 把 `DSH_OBSIDIAN_APP` 设成它的绝对路径 —— 在任何平台上都优先于自动查找 |
 | 知识库被移动或删除 | 目录树显示错误并重新询问文件夹 —— 读失败**绝不会**被缓存成「空目录」 |
 
 因为确实用到了 `files` 和 `network`,只给「无能力」插件自动放行的商城会把本插件保持在

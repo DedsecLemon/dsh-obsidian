@@ -27,10 +27,10 @@ temporary profile, installs the **packed tarball** into it, exercises both halve
 ## Observed run
 
 ```
-  ok   pack  [dsh-obsidian-panel-1.1.1.tgz (76616 bytes)]
+  ok   pack  [dsh-obsidian-panel-1.2.0.tgz (78344 bytes)]
   ok   install  [<temp>/dsh-profile-lifecycle-XXXXXX]
   ok   install runs no lifecycle scripts  [none declared]
-  ok   install keeps the declared identity  [dsh-obsidian-panel@1.1.1]
+  ok   install keeps the declared identity  [dsh-obsidian-panel@1.2.0]
   ok   install needs no runtime dependencies  [none]
   ok   bundle patch names the installed package  [cordis.patch.yml]
   ok   client half carries the loader id  [client.js]
@@ -44,6 +44,11 @@ lifecycle evidence OK (11/11 steps)
 
 Windows, DSH `0.2.0-rc.2`, Node `v22.12.0`, installer `pnpm` (npm is used automatically when
 pnpm is not installed).
+
+**Which systems this was run on, and which it was not.** These steps ran on Windows. The
+macOS and Linux behaviour in `package.json`'s `os` list rests on `test/platform-check.mjs`
+(22 checks: every platform's Obsidian locations and registry path), not on a run on those
+systems — say so rather than implying hardware that was never touched.
 
 CI runs the same script with **`--skip-host`** (10/10 steps): a runner has no vault, and the
 skipped step is the only one that needs one. `test/manifest-check.mjs` (22 checks) runs in CI

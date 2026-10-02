@@ -53,6 +53,16 @@ expect('the two Node declarations agree', compatibility.node === manifest.engine
 expect('the client profile is declared', Array.isArray(compatibility.profiles) && compatibility.profiles.includes('web'),
   (compatibility.profiles ?? []).join(', '))
 
+// `systems` in the marketplace listing comes from `manifest.os` (the review maps
+// win32/darwin/linux to Windows/macOS/Linux), so the claim is only as good as
+// test/platform-check.mjs, which asserts every platform's Obsidian paths.
+const systems = { win32: 'Windows', darwin: 'macOS', linux: 'Linux' }
+expect('the supported systems are declared', Array.isArray(manifest.os) && manifest.os.length > 0,
+  (manifest.os ?? []).map(entry => systems[entry] ?? entry).join(', '))
+expect('every declared system is one the review knows',
+  Array.isArray(manifest.os) && manifest.os.every(entry => Object.hasOwn(systems, entry)),
+  (manifest.os ?? []).join(', '))
+
 // Per-release evidence: range-only claims are not installable evidence, so at least one
 // official release must be marked exactly, and every status must be a legal one.
 const releases = compatibility.dshReleases ?? {}
