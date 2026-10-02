@@ -78,6 +78,7 @@ pnpm install
 node test/render-check.cjs     # 客户端半:注册/渲染 + 各类护栏
 node test/mount-check.cjs      # 真实 jsdom 挂载:树、笔记页、大纲、对话、首次引导
 node test/host-check.mjs       # 宿主半:全部 HTTP 路由 + 安全边界
+node test/profile-lifecycle.mjs  # 一次性 profile 里的 安装 → 启动 → 卸载(见 docs/LIFECYCLE.md)
 ```
 
 > `host-check` 会读写**真实状态文件** `~/.dsh/dsh-obsidian/{chat,vault,diag}.json`。

@@ -15,7 +15,9 @@ import { homedir, tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 
 const here = fileURLToPath(new URL('.', import.meta.url))
-const modulePath = join(here, '..', 'index.mjs')
+// The host half under test. `DSH_OBSIDIAN_MODULE` points this at an INSTALLED copy (a
+// disposable profile's node_modules); see test/profile-lifecycle.mjs.
+const modulePath = process.env.DSH_OBSIDIAN_MODULE ?? join(here, '..', 'index.mjs')
 
 const routes = new Map()
 const tools = []

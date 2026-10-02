@@ -33,6 +33,12 @@ jobs:
           node --check index.mjs
           node --check client.js
 
+      - name: Manifest contract (compatibility, permissions, bundle identity)
+        run: node test/manifest-check.mjs
+
+      - name: Lifecycle evidence (pack → install → uninstall in a throwaway profile)
+        run: node test/profile-lifecycle.mjs --skip-host
+
       - name: Client harness (seats, registrations, render, guards)
         run: node test/render-check.cjs
 

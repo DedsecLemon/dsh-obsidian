@@ -19,7 +19,11 @@ const resolveFrom = createRequire(join(__dirname, '..', 'package.json'))
 const React = resolveFrom('react')
 const { renderToStaticMarkup } = resolveFrom('react-dom/server')
 
-const CLIENT_PATH = join(__dirname, '..', 'client.js')
+// The client half under test. `DSH_OBSIDIAN_CLIENT` points this at an INSTALLED copy (a
+// disposable profile's node_modules) — test/profile-lifecycle.mjs does exactly that, so
+// "the package activates" is asserted against what was installed, not against the tree
+// it was packed from.
+const CLIENT_PATH = process.env.DSH_OBSIDIAN_CLIENT ?? join(__dirname, '..', 'client.js')
 const source = readFileSync(CLIENT_PATH, 'utf8')
 
 let registration = null

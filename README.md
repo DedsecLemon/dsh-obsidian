@@ -25,6 +25,56 @@ author, so that name could never be published — or installed — without getti
 instead. The plugin's runtime identity is unchanged: routes are `/dsh-obsidian/*`, slot keys
 are `dsh-obsidian/*`, and the app label is `知识库`.
 
+## Compatibility
+
+| | |
+|---|---|
+| DSH | `^0.2.0-rc.2` — verified on **0.2.0-rc.2** |
+| Node.js | `>=22.12.0` — only stable `node:` APIs; tested on 22.12.0 |
+| Profile | `web` (`dsh.client.platform`), i.e. any profile with a client half |
+| Per-release | `dsh.compatibility.dshReleases` in `package.json`. Only `0.2.0-rc.2` is `compatible`; anything else is `unknown` until somebody runs it — that is what the field means |
+| Install / start / uninstall | verified against the packed tarball in a **disposable profile**: [docs/LIFECYCLE.md](docs/LIFECYCLE.md) |
+
+Re-run the compatibility matrix and the lifecycle evidence before claiming a new release:
+
+```sh
+node test/profile-lifecycle.mjs    # install → start → uninstall, in a temp profile
+node test/mount-check.cjs          # the client half, mounted
+node test/render-check.cjs         # registration + the guards
+node test/host-check.mjs           # every HTTP route and the security boundary
+```
+
+## What it touches, and what breaks when it cannot
+
+A vault panel is not a toy: it reads your notes, writes the one you edit, and needs a
+place to keep three small state files. So this plugin declares its surfaces instead of
+leaving them to be discovered:
+
+| Signal | What is actually true |
+|---|---|
+| **files** | Reads the vault folder **you chose** (and, only for the first-run guess, Obsidian's own registry `%APPDATA%\obsidian\obsidian.json`). Writes: the three state files under `DSH_HOME/dsh-obsidian/` (`vault.json`, `chat.json`, `diag.json`, ≈0.3 KB) and the **one note you press 保存 on**. Every read is confined to the vault root — escapes through symlinks or junctions are refused (the host harness proves it) |
+| **network** | **No outbound requests at all.** The panel fetches the host's own loopback routes (`/dsh-obsidian/*`), which is why the client half contains `fetch`. There is no telemetry and no third-party endpoint |
+| **commands** | Opening Obsidian goes through the **host's own subprocess service** — the plugin never imports `node:child_process` and never builds a shell string. It happens only when you click 在 Obsidian 中打开 |
+| **credentials** | **None.** The marketplace scanner flags *any* `process.env` read as a credentials signal; this plugin reads `APPDATA`, `LOCALAPPDATA`, `ProgramFiles`, `ProgramFiles(x86)`, `DSH_HOME` and `DSH_OBSIDIAN_APP` — environment **paths**. No tokens, no API keys, no cookies, no OAuth |
+| **dependencies** | No runtime dependencies (`dependencies` is empty). `jsdom`/`react`/`react-dom` are dev-only, for the harnesses |
+| **external services** | The Obsidian desktop app — optional, only for "open in Obsidian" — and the DSH host it runs inside |
+
+Failure bounds — the plugin degrades in pieces rather than half-registering:
+
+| Missing | What the reader sees |
+|---|---|
+| `slots`, `sidebarRightTabs`, `sidebarRight` | the plugin does not activate at all — no entry in the left Sidebar, and nothing stays half-registered |
+| `sessions`, `workspaces` | the tree, the note pages and the outline work normally; `对话` says why it cannot open |
+| `uiWorkspace` | no folder picker and no conversation navigation; the vault path can still be set from the panel |
+| the host's `webServer` | no routes register, so the panel has no data to show |
+| Obsidian is not installed | only "open in Obsidian" is unavailable (the `obsidian://` protocol handler is still tried) |
+| the vault was moved or deleted | the tree shows the error and asks for a folder again — a failed read is never cached as "empty" |
+
+Because `files` and `network` are genuinely used, a marketplace that grants **automatic**
+installation only to capability-free plugins will keep this one **user-reviewed**. That is
+the honest outcome, not a defect to engineer around: the alternative would be a note
+browser that cannot read notes.
+
 ## Which folder is the vault
 
 Obsidian's registry is a **guess**, not an answer. On first run the panel shows a

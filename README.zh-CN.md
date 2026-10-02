@@ -23,6 +23,53 @@ git clone https://github.com/DedsecLemon/dsh-obsidian.git D:/skill/dsh-obsidian
 用那个名字既发不上去,装下来也会变成它。插件运行期的身份不受影响:路由是 `/dsh-obsidian/*`,
 slot 键是 `dsh-obsidian/*`,界面上的名字是 `知识库`。
 
+## 兼容范围
+
+| | |
+|---|---|
+| DSH | `^0.2.0-rc.2` —— 已在 **0.2.0-rc.2** 上验证 |
+| Node.js | `>=22.12.0` —— 只用稳定的 `node:` API,实测 22.12.0 |
+| Profile | `web`(`dsh.client.platform`),即任何带客户端半的 profile |
+| 逐版本声明 | `package.json` 里的 `dsh.compatibility.dshReleases`。只有 `0.2.0-rc.2` 是 `compatible`,其余是 `unknown` —— 直到有人真的跑过,这个字段就是这个意思 |
+| 安装/启动/卸载 | 已用**打包产物**在**一次性 profile** 里验证:[docs/LIFECYCLE.md](docs/LIFECYCLE.md) |
+
+发布新版本前,重跑一遍兼容矩阵与生命周期证据:
+
+```sh
+node test/profile-lifecycle.mjs    # 安装 → 启动 → 卸载,全部在临时 profile 里
+node test/mount-check.cjs          # 客户端半,真实挂载
+node test/render-check.cjs         # 注册 + 各类护栏
+node test/host-check.mjs           # 全部 HTTP 路由 + 安全边界
+```
+
+## 它碰了什么、碰不到时会发生什么
+
+知识库面板不是玩具:它读你的笔记、写你正在编辑的那一篇,还需要一个地方放三个小状态文件。所以这个
+插件把它的能力面**声明出来**,而不是等人去发现:
+
+| 信号 | 实际情况 |
+|---|---|
+| **files** | 读**你选定**的知识库文件夹(以及只为首次猜测而读 Obsidian 自己的注册表 `%APPDATA%\obsidian\obsidian.json`)。写:三个状态文件 `DSH_HOME/dsh-obsidian/`(`vault.json`、`chat.json`、`diag.json`,共约 0.3 KB),以及**你按下 `保存` 的那一篇笔记**。所有读取都限制在知识库根目录内 —— 通过符号链接/junction 的逃逸会被拒绝(host harness 有断言) |
+| **network** | **没有任何对外请求。** 面板访问的是宿主自己的回环路由(`/dsh-obsidian/*`),这也是客户端半里有 `fetch` 的原因。没有遥测,没有第三方端点 |
+| **commands** | 打开 Obsidian 走的是**宿主自己的 subprocess 服务** —— 插件从不 import `node:child_process`,也不拼 shell 字符串。只在你点「在 Obsidian 中打开」时发生 |
+| **credentials** | **没有。** 商城的扫描器把**任何** `process.env` 读取都算作 credentials 信号;本插件读的是 `APPDATA`、`LOCALAPPDATA`、`ProgramFiles`、`ProgramFiles(x86)`、`DSH_HOME`、`DSH_OBSIDIAN_APP` —— 这些都是**环境路径**。没有 token、没有 API key、没有 cookie、没有 OAuth |
+| **依赖** | 无运行时依赖(`dependencies` 为空)。`jsdom`/`react`/`react-dom` 只给 harness 用 |
+| **外部服务** | Obsidian 桌面应用(可选,只影响「在 Obsidian 中打开」)+ 它所运行的 DSH 宿主 |
+
+失败边界 —— 缺东西时是**成块地退化**,而不是注册到一半:
+
+| 缺什么 | 读者看到什么 |
+|---|---|
+| `slots`、`sidebarRightTabs`、`sidebarRight` | 插件**完全不激活** —— 左侧栏没有入口,也不会留下半截注册 |
+| `sessions`、`workspaces` | 目录树、笔记页、大纲照常;点 `对话` 会说明为什么打不开 |
+| `uiWorkspace` | 没有文件夹选择器、也无法导航到对话;知识库路径仍可在面板里手动设置 |
+| 宿主的 `webServer` | 路由注册不上,面板没有数据 |
+| 本机没装 Obsidian | 只有「在 Obsidian 中打开」不可用(仍会尝试 `obsidian://` 协议处理器) |
+| 知识库被移动或删除 | 目录树显示错误并重新询问文件夹 —— 读失败**绝不会**被缓存成「空目录」 |
+
+因为确实用到了 `files` 和 `network`,只给「无能力」插件自动放行的商城会把本插件保持在
+**user-reviewed**。这是诚实的结果,不是需要绕开的缺陷 —— 另一种做法是做一个读不了笔记的笔记浏览器。
+
 ## 哪个文件夹才是知识库
 
 Obsidian 的注册表只是一个**猜测**,不是答案。第一次运行时,面板显示的不是目录树,而是选择器:它给出探测到的知识库,外加一个文件夹选择器;在读者确认某个文件夹之前,什么都**不读**。这个选择存在 `DSH_HOME` 下(`dsh-obsidian/vault.json`),此后每一次读取都由它说了算,优先于注册表。标题栏保留了一个文件夹按钮,所以之后想换只需一次点击。

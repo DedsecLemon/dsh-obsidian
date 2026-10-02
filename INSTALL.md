@@ -78,7 +78,7 @@ all.
 
 ## node_modules is not needed
 
-`node_modules` is needed only by the three harnesses under `test/`. **You need
+`node_modules` is needed only by the harnesses under `test/`. **You need
 `pnpm install` only to run the tests.**
 
 ```
@@ -87,6 +87,7 @@ pnpm install
 node test/render-check.cjs     # client half: registration, render, guards
 node test/mount-check.cjs      # a real jsdom mount: tree, note page, outline, conversation, first run
 node test/host-check.mjs       # host half: every HTTP route + the security boundary
+node test/profile-lifecycle.mjs  # install → start → uninstall in a throwaway profile (docs/LIFECYCLE.md)
 ```
 
 > `host-check` reads and writes the **real state files**
