@@ -2,8 +2,27 @@
 
 # dsh-obsidian
 
+[![CI](https://github.com/DedsecLemon/dsh-obsidian/actions/workflows/ci.yml/badge.svg)](https://github.com/DedsecLemon/dsh-obsidian/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/dsh-obsidian-panel.svg)](https://www.npmjs.com/package/dsh-obsidian-panel)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 An Obsidian vault inside the DSH right Sidebar. **Install steps: [INSTALL.md](INSTALL.md).**
 No build step — `index.mjs` and `client.js` are the running source.
+
+```sh
+# in ~/.dsh/profiles/<your profile>/package.json
+"dsh-obsidian-panel": "^1.1.0"     # dependencies
+"bundles": ["dsh-obsidian-panel"]  # dsh.profile.bundles
+```
+
+## Naming
+
+The project is **dsh-obsidian**; the published package is **`dsh-obsidian-panel`**.
+It has to be: the name `dsh-obsidian` on npm belongs to
+[a different DSH + Obsidian plugin](https://www.npmjs.com/package/dsh-obsidian) by another
+author, so publishing under it is impossible — and installing under it would silently give
+you that one instead. The plugin's runtime identity is unchanged either way: routes are
+`/dsh-obsidian/*`, slot keys are `dsh-obsidian/*`, and the app label is `知识库`.
 
 ## Which folder is the vault
 

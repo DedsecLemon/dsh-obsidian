@@ -32,7 +32,7 @@ const windowStub = {
 new Function('window', 'fetch', source)(windowStub, () => Promise.reject(new Error('no fetch in harness')))
 
 if (registration === null) throw new Error('client.js never called window.__ModuleLoader__.load')
-if (registration.id !== 'dsh-obsidian') throw new Error('unexpected module id: ' + registration.id)
+if (registration.id !== 'dsh-obsidian-panel') throw new Error('unexpected module id: ' + registration.id)
 
 const factoryRequire = (specifier) => {
   if (specifier === 'react') return React

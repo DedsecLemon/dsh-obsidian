@@ -4,14 +4,17 @@
 
 这个插件**不需要构建**:`index.mjs` 和 `client.js` 就是直接运行的源码,拷过去即可。
 
-## 1. 放好文件夹
+## 1. 拿到代码
 
-把整个 `dsh-obsidian` 文件夹放到一个固定的位置,例如:
+两种方式:**从 npm 装**(就是 profile 里加一行,见下),或者**从本仓库**clone/下载,
+把整个文件夹放到一个固定的位置,例如:
 
 - Windows:`D:\skill\dsh-obsidian`
 - macOS / Linux:`~/dsh-obsidian`
 
-路径里**尽量避免中文和空格**,能省掉一类麻烦。
+文件夹叫什么无所谓 —— 插件的身份来自 `package.json`,而它的**包名是 `dsh-obsidian-panel`**
+(项目本身叫 `dsh-obsidian`,原因见 README 里的命名说明)。路径里**尽量避免中文和空格**,
+能省掉一类麻烦。
 
 ## 2. 挂进 DSH 的 profile
 
@@ -21,16 +24,22 @@ DSH 的插件挂在某个 **profile** 下,不是丢进目录就生效。编辑:
 ~/.dsh/profiles/<你的 profile>/package.json
 ```
 
-**a)** 在 `dependencies` 里加一行(路径换成**你自己的**):
+**a)** 在 `dependencies` 里加一行 —— 从 registry 装:
 
 ```json
-"dsh-obsidian": "link:D:/skill/dsh-obsidian"
+"dsh-obsidian-panel": "^1.1.0"
+```
+
+或者用你 clone 下来的文件夹(路径换成**你自己的**):
+
+```json
+"dsh-obsidian-panel": "link:D:/skill/dsh-obsidian"
 ```
 
 **b)** 在顶层的 `bundles` 数组里加上包名(没有这个字段就新建):
 
 ```json
-"bundles": ["dsh-obsidian"]
+"bundles": ["dsh-obsidian-panel"]
 ```
 
 **c)** 在该 profile 目录下执行:
@@ -39,7 +48,8 @@ DSH 的插件挂在某个 **profile** 下,不是丢进目录就生效。编辑:
 pnpm install
 ```
 
-> 也可以直接让 DSH 里的 AI 代劳:告诉它「用 `plugin_manager` 把 `link:<你的路径>` 装成 bundle」。
+> 也可以直接让 DSH 里的 AI 代劳:告诉它「用 `plugin_manager` 把 `dsh-obsidian-panel`
+> (或 `link:<你的路径>`)装成 bundle」。
 > 安装日志在 `~/.dsh/profiles/<profile>/.plugin-manager/logs/`。
 
 ## 3. 重启 DSH
@@ -59,8 +69,8 @@ pnpm install
 | 需要的东西 | 缺了会怎样 |
 |---|---|
 | 客户端服务 `slots`、`sidebarRightTabs`、`sidebarRight` | **插件整个不激活**(左侧栏没有任何入口) |
-| `sessions` + `workspaces` | 只是**没有底部对话框**,目录树/搜索/笔记页照常 |
-| `uiWorkspace` | 文件夹选择器打不开,改成手动设置路径 |
+| `sessions` + `workspaces` | 只是**没有对话**:目录树/笔记页/大纲照常,点 `对话` 会明说不行 |
+| `uiWorkspace` | 文件夹选择器打不开,`对话` 也无法导航,改成手动设置路径 |
 | 宿主服务 `webServer` | 所有 HTTP 路由注册不上,面板没数据 |
 | 本机装有 Obsidian | 只有「在 Obsidian 中打开」不可用,其余功能不受影响 |
 
@@ -73,8 +83,8 @@ pnpm install
 ```
 cd dsh-obsidian
 pnpm install
-node test/render-check.cjs     # 客户端半:座位/注册/渲染 + 各类护栏
-node test/mount-check.cjs      # 真实 jsdom 挂载:树、笔记页、拖拽、搜索、首次引导
+node test/render-check.cjs     # 客户端半:注册/渲染 + 各类护栏
+node test/mount-check.cjs      # 真实 jsdom 挂载:树、笔记页、大纲、对话、首次引导
 node test/host-check.mjs       # 宿主半:全部 HTTP 路由 + 安全边界
 ```
 
@@ -99,7 +109,7 @@ macOS/Linux: ~/.dsh/dsh-obsidian/
 | 文件 | 内容 |
 |---|---|
 | `vault.json` | 你选的知识库路径(优先于 Obsidian 注册表) |
-| `chat.json` | 底部对话框的会话 id(历史靠它留住) |
+| `chat.json` | 知识库对话的 Session id(历史靠它续上;`对话` 会因此问「继续还是新开」) |
 | `diag.json` | 客户端自检报告(注册了哪些、有没有渲染报错) |
 
 **拷到新电脑后这些文件不存在完全没关系** —— 第一次打开会重新问你选哪个知识库。

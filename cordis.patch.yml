@@ -3,5 +3,5 @@
 # The row is mounted by package name (not by a relative path) so Node's module
 # resolution finds the installed code, exactly like any other bundle.
 - insert:
-    - id: dsh-obsidian
-      name: dsh-obsidian
+    - id: dsh-obsidian-panel
+      name: dsh-obsidian-panel

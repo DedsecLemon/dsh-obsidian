@@ -12,7 +12,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSyn
 import { homedir } from 'node:os'
 import { basename, dirname, join, relative, resolve, sep } from 'node:path'
 
-export const name = 'dsh-obsidian'
+export const name = 'dsh-obsidian-panel'
 
 const ROUTE_OPEN = '/dsh-obsidian/open'
 const ROUTE_STATUS = '/dsh-obsidian/status'

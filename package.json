@@ -1,8 +1,7 @@
 {
-  "name": "dsh-obsidian",
-  "version": "1.0.0",
-  "private": true,
-  "description": "把 Obsidian 知识库放进 DSH 右侧栏：目录树、全文搜索、Obsidian 排版风格的笔记页、可拖拽高度的对话框 / Obsidian vault in the DSH right sidebar: vault tree, full-vault search, Obsidian-styled note pages, and a resizable conversation box.",
+  "name": "dsh-obsidian-panel",
+  "version": "1.1.0",
+  "description": "把 Obsidian 知识库放进 DSH 右侧栏：目录树、全文搜索、Obsidian 排版风格的笔记页、笔记大纲，对话则交给应用自己的对话面板在中间打开 / An Obsidian vault in the DSH right Sidebar: vault tree, full-vault search, Obsidian-styled note pages, a note outline, and the vault conversation opened in the app's own centre panel.",
   "type": "module",
   "main": "./index.mjs",
   "exports": {
@@ -17,7 +16,9 @@
     "client.js",
     "cordis.patch.yml",
     "README.md",
-    "INSTALL.md"
+    "README.zh-CN.md",
+    "INSTALL.md",
+    "INSTALL.zh-CN.md"
   ],
   "repository": {
     "type": "git",
@@ -38,7 +39,10 @@
   "keywords": [
     "dsh",
     "dsh-plugin",
-    "obsidian"
+    "deepseek-harness",
+    "obsidian",
+    "obsidian-vault",
+    "cordis"
   ],
   "license": "MIT",
   "devDependencies": {

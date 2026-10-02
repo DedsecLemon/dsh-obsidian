@@ -16,7 +16,7 @@
 // active light/dark theme without a stylesheet.
 
 window.__ModuleLoader__.load({
-	id: 'dsh-obsidian',
+	id: 'dsh-obsidian-panel',
 	factory: (require) => {
 		var module = { exports: {} };
 		var exports = module.exports;

@@ -5,15 +5,18 @@
 This plugin **needs no build**: `index.mjs` and `client.js` are the source that runs
 directly, so copying the folder over is enough.
 
-## 1. Put the folder in place
+## 1. Get the code
 
-Keep the whole `dsh-obsidian` folder somewhere stable, for example:
+Two ways. **From npm** is one line in a profile (below). **From this repository**,
+clone or download it and keep the folder somewhere stable, for example:
 
 - Windows: `D:\skill\dsh-obsidian`
 - macOS / Linux: `~/dsh-obsidian`
 
-**Avoid non-ASCII characters and spaces in the path** if you can — that skips a
-whole class of trouble.
+The folder name does not matter — the plugin's identity comes from `package.json`,
+whose package name is **`dsh-obsidian-panel`** (the project is `dsh-obsidian`; see the
+naming note in the README). **Avoid non-ASCII characters and spaces in the path** if you
+can — that skips a whole class of trouble.
 
 ## 2. Hook it into a DSH profile
 
@@ -23,17 +26,23 @@ A DSH plugin hangs off a **profile**; dropping it into a directory is not enough
 ~/.dsh/profiles/<your profile>/package.json
 ```
 
-**a)** Add a line to `dependencies` (with **your own** path):
+**a)** Add a line to `dependencies` — from the registry:
 
 ```json
-"dsh-obsidian": "link:D:/skill/dsh-obsidian"
+"dsh-obsidian-panel": "^1.1.0"
+```
+
+or from a folder you cloned (with **your own** path):
+
+```json
+"dsh-obsidian-panel": "link:D:/skill/dsh-obsidian"
 ```
 
 **b)** Add the package name to the top-level `bundles` array (create the field if it
 does not exist):
 
 ```json
-"bundles": ["dsh-obsidian"]
+"bundles": ["dsh-obsidian-panel"]
 ```
 
 **c)** Run this in that profile directory:
@@ -43,7 +52,7 @@ pnpm install
 ```
 
 > Alternatively, let the AI inside DSH do it: tell it "use `plugin_manager` to install
-> `link:<your path>` as a bundle".
+> `dsh-obsidian-panel`" (or `link:<your path>`) as a bundle.
 > Install logs are under `~/.dsh/profiles/<profile>/.plugin-manager/logs/`.
 
 ## 3. Restart DSH
@@ -65,8 +74,8 @@ confirm a folder it reads **nothing**.
 | What it needs | What is missing without it |
 |---|---|
 | The client services `slots`, `sidebarRightTabs`, `sidebarRight` | **The entire plugin does not activate** (no entry anywhere in the left Sidebar) |
-| `sessions` + `workspaces` | Only the **conversation box at the foot**; the tree, search and note pages work as usual |
-| `uiWorkspace` | The folder picker will not open; set the path by hand instead |
+| `sessions` + `workspaces` | Only the conversation: the tree, the note page and the outline work as usual, and `对话` says so |
+| `uiWorkspace` | The folder picker will not open and `对话` cannot navigate — set the path by hand instead |
 | The host service `webServer` | No HTTP route registers, so the panel has no data |
 | Obsidian installed on this machine | Only "open in Obsidian" is unavailable; nothing else is affected |
 
@@ -82,8 +91,8 @@ all.
 ```
 cd dsh-obsidian
 pnpm install
-node test/render-check.cjs     # client half: seats/registrations/render + the guards
-node test/mount-check.cjs      # a real jsdom mount: tree, note page, drag, search, first run
+node test/render-check.cjs     # client half: registration, render, guards
+node test/mount-check.cjs      # a real jsdom mount: tree, note page, outline, conversation, first run
 node test/host-check.mjs       # host half: every HTTP route + the security boundary
 ```
 
@@ -118,7 +127,7 @@ macOS/Linux: ~/.dsh/dsh-obsidian/
 | File | Contents |
 |---|---|
 | `vault.json` | The vault path you chose (outranks Obsidian's registry) |
-| `chat.json` | The Session id of the conversation box (the history lives or dies with it) |
+| `chat.json` | The Session id of the vault conversation (history is resumed from it; `对话` offers "continue or start over" because of it) |
 | `diag.json` | The client half's own self-check report (what registered, whether anything failed to render) |
 
 **After copying to a new machine it is completely fine for these files not to

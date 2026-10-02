@@ -46,7 +46,7 @@ const ctx = {
 }
 
 const plugin = await import(pathToFileURL(modulePath).href)
-if (plugin.name !== 'dsh-obsidian') throw new Error('unexpected plugin name: ' + String(plugin.name))
+if (plugin.name !== 'dsh-obsidian-panel') throw new Error('unexpected plugin name: ' + String(plugin.name))
 plugin.apply(ctx)
 
 const EXPECTED_ROUTES = [
