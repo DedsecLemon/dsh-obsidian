@@ -5,6 +5,37 @@
 [![CI](https://github.com/DedsecLemon/dsh-obsidian/actions/workflows/ci.yml/badge.svg)](https://github.com/DedsecLemon/dsh-obsidian/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
+**Your real Obsidian vault, in the DSH right Sidebar** — browse the vault tree, search every note, read notes in Obsidian's own reading-view typography, follow `[[wikilinks]]`, edit in place, and hand a note to Obsidian itself when you want the app.
+
+<!-- TODO(screenshot): the GIF goes here — open the right Sidebar → vault tree → a note page → outline jump → edit and save. Drop it in when it is ready. -->
+
+## What you get
+
+- **The vault you actually use.** First run offers the vault Obsidian has open, or any folder you pick; the choice sticks and outranks auto-detection from then on.
+- **The vault tree, in the right Sidebar.** Only the folder you expand is read.
+- **Search the whole vault.** You get the matching lines and the note each one is in, not just filenames.
+- **Notes that look like Obsidian.** The page uses Obsidian's own reading-view typography, so the same note reads the same in both places.
+- **`[[wikilinks]]` that resolve.** A link is looked up across the whole vault, and clicking it opens that note as its own page.
+- **Outline jump, edit in place.** Click a heading to jump to it; edit the note in the same box and save that one file.
+
+## Why this one, and not `obsidian-workbench`
+
+`Bob-Bo1/obsidian-workbench` is an Obsidian-flavoured Markdown workbench: hand it Markdown files and it browses, edits, previews, creates, moves and deletes them inside a workspace. This plugin starts from the other end — it attaches to **the vault folder Obsidian itself uses**, auto-detected from Obsidian's registry or chosen once by hand, and works in vault units: `[[wikilinks]]` resolve against the whole vault, note pages use Obsidian's reading-view numbers, and a note can be handed to Obsidian to open. If your notes already live in an Obsidian vault and you want to read and touch *that* vault from DSH, this is the one that knows what a vault is. If you want a general Markdown file manager for a workspace, the workbench is the better fit.
+
+## Install (3 lines)
+
+```sh
+git clone https://github.com/DedsecLemon/dsh-obsidian.git D:/skill/dsh-obsidian
+# in ~/.dsh/profiles/<your profile>/package.json add: "dsh-obsidian-panel": "link:D:/skill/dsh-obsidian"
+# put it under the nested dsh.profile.bundles (not a top-level "bundles"), then run pnpm install there
+```
+
+The full copy-paste profile file, the restart rules and troubleshooting are in **[INSTALL.md](INSTALL.md)**.
+
+**Requirements:** DSH `^0.2.0-rc.2` on a `web` profile, Node `>=22.12.0`. If the host has no `sessions`/`workspaces` service, the tree, search, note pages and outline still work — you just do not get the `对话` (conversation) entry.
+
+---
+
 An Obsidian vault inside the DSH right Sidebar. **Install steps: [INSTALL.md](INSTALL.md).**
 No build step — `index.mjs` and `client.js` are the running source.
 

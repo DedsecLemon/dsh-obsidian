@@ -5,6 +5,37 @@
 [![CI](https://github.com/DedsecLemon/dsh-obsidian/actions/workflows/ci.yml/badge.svg)](https://github.com/DedsecLemon/dsh-obsidian/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
+**把你真实的 Obsidian 知识库放进 DSH 右侧栏** —— 浏览目录树、全库搜索、按 Obsidian 阅读视图的排版读笔记、点开 `[[双向链接]]`、就地编辑,想用真身时一键交给 Obsidian 打开。
+
+<!-- TODO(截图): 流程 GIF 放在这里 —— 点开右侧栏 → 目录树 → 笔记页 → 大纲跳转 → 就地编辑并保存。有图后补上。 -->
+
+## 装上之后
+
+- **接的是你真实在用的那个库。** 首次启动直接给出 Obsidian 正打开的知识库,也可以自己选文件夹;选定后一直生效,并优先于自动探测。
+- **右侧栏里的目录树。** 只读你展开的那一层。
+- **全库搜索。** 给出命中的行和它所在的那篇笔记,不只是文件名。
+- **笔记页与 Obsidian 同样排版。** 用的是 Obsidian 阅读视图自己的排版数值,同一篇笔记在两边读起来一致。
+- **`[[双向链接]]` 点得开。** 链接在整库内解析,点开就是那篇笔记自己的页面。
+- **大纲跳转、就地编辑。** 点标题直接跳过去;在同一个框里改完,保存这一篇。
+
+## 为什么是这一个,而不是 `obsidian-workbench`
+
+`Bob-Bo1/obsidian-workbench` 是一个 Obsidian 风格的 Markdown 工作台:把 Markdown 文件交给它,它在工作区里浏览、编辑、预览、新建、移动、删除。本插件从另一端出发 —— 接的是 **Obsidian 自己用的那个知识库文件夹**(从 Obsidian 注册表自动探测,或首次手动选一次),并且以「一个库」为单位工作:`[[双向链接]]` 在整个库里解析,笔记页用 Obsidian 阅读视图的排版数值,还能把一篇笔记交给 Obsidian 打开。如果你的笔记本来就在 Obsidian 库里、你想在 DSH 里读它改它,那这个插件知道「库」是什么;如果你要的是工作区里的通用 Markdown 文件管理器,工作台更合适。
+
+## 安装(3 行)
+
+```sh
+git clone https://github.com/DedsecLemon/dsh-obsidian.git D:/skill/dsh-obsidian
+# 在 ~/.dsh/profiles/<你的 profile>/package.json 里加: "dsh-obsidian-panel": "link:D:/skill/dsh-obsidian"
+# 并写进嵌套的 dsh.profile.bundles(不是顶层 "bundles"),然后在那个目录里 pnpm install
+```
+
+完整可抄的 profile 文件、重启规则与排错见 **[INSTALL.zh-CN.md](INSTALL.zh-CN.md)**。
+
+**环境要求:** DSH `^0.2.0-rc.2`(web profile)、Node `>=22.12.0`。宿主如果没有 `sessions`/`workspaces`,目录树、搜索、笔记页和大纲照常可用 —— 只是没有 `对话` 入口。
+
+---
+
 把 Obsidian 知识库放进 DSH 右侧栏。**安装步骤见 [INSTALL.zh-CN.md](INSTALL.zh-CN.md)。**
 不需要构建 —— `index.mjs` 和 `client.js` 就是直接运行的源码。
 
