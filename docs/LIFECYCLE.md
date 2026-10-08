@@ -27,40 +27,42 @@ temporary profile, installs the **packed tarball** into it, exercises both halve
 ## Observed run
 
 ```
-  ok   pack  [dsh-obsidian-panel-1.2.0.tgz (78344 bytes)]
+  ok   pack  [dsh-obsidian-panel-1.2.1.tgz (81682 bytes)]
   ok   install  [<temp>/dsh-profile-lifecycle-XXXXXX]
   ok   install runs no lifecycle scripts  [none declared]
-  ok   install keeps the declared identity  [dsh-obsidian-panel@1.2.0]
+  ok   install keeps the declared identity  [dsh-obsidian-panel@1.2.1]
   ok   install needs no runtime dependencies  [none]
   ok   bundle patch names the installed package  [cordis.patch.yml]
   ok   client half carries the loader id  [client.js]
   ok   start: client half registers  [render-check OK against the installed client half]
-  ok   start: host half applies and answers every route  [99 checks, 1 failure(s), all vault-fixture dependent]
+  ok   start: host half applies and answers every route  [99 checks, 0 failure(s)]
   ok   uninstall removes the package  [node_modules/dsh-obsidian-panel]
   ok   uninstall leaves nothing of the plugin in the profile  [none]
 
 lifecycle evidence OK (11/11 steps)
 ```
 
-Windows, DSH `0.2.0-rc.2`, Node `v22.12.0`, installer `pnpm` (npm is used automatically when
+Windows, DSH `0.2.0-rc.2`, Node `v24.16.0`, installer `pnpm` (npm is used automatically when
 pnpm is not installed).
 
 **Which systems this was run on, and which it was not.** These steps ran on Windows. The
 macOS and Linux behaviour in `package.json`'s `os` list rests on `test/platform-check.mjs`
-(22 checks: every platform's Obsidian locations and registry path), not on a run on those
-systems — say so rather than implying hardware that was never touched.
+(30 checks: every platform's Obsidian locations, registry path and `obsidian://` opener),
+not on a run on those systems — say so rather than implying hardware that was never touched.
 
 CI runs the same script with **`--skip-host`** (10/10 steps): a runner has no vault, and the
-skipped step is the only one that needs one. `test/manifest-check.mjs` (22 checks) runs in CI
+skipped step is the only one that needs one. `test/manifest-check.mjs` (24 checks) runs in CI
 too, so the compatibility and permission declarations themselves are checked on every push.
 
-**The one failure is a fixture failure, not a contract failure.** `host-check` also asserts
-things about *one machine's vault contents* — that a particular note exists, that a
-wikilink resolves, that an oversized note is truncated. On the machine this was recorded
-on the vault has no such note, so `note reads a real file` fails while every check about
-applying the plugin, injecting its services and answering its routes passes. The lifecycle
-script tolerates exactly that class of failure (`real file`, `does not exist`, `README`,
-`wikilink`, `truncat`) and **fails** on anything else — see `test/profile-lifecycle.mjs`.
+**A vault-fixture failure is not a contract failure.** `host-check` also asserts things
+about *one machine's vault contents* — that a particular note exists, that a wikilink
+resolves, that an oversized note is truncated. On a machine whose vault has no such note,
+`note reads a real file` fails while every check about applying the plugin, injecting its
+services and answering its routes passes. The lifecycle script tolerates exactly that class
+of failure (`real file`, `does not exist`, `README`, `wikilink`, `truncat`) and **fails** on
+anything else — see `test/profile-lifecycle.mjs`. The run above is on a vault that satisfies
+those fixture expectations, hence 0 failures; the tolerance is what keeps this evidence
+meaningful on a machine whose vault does not.
 
 ## Leftovers worth knowing about
 

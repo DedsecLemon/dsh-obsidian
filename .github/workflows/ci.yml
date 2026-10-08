@@ -45,5 +45,5 @@ jobs:
       - name: Client harness (seats, registrations, render, guards)
         run: node test/render-check.cjs
 
-      - name: "Mount harness (real jsdom mount: tree, note page, resize, first run)"
+      - name: "Mount harness (real jsdom mount: tree, note page, edit mode, first run)"
         run: node test/mount-check.cjs

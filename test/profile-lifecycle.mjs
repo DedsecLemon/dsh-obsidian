@@ -142,7 +142,6 @@ try {
   step('start: client half registers', renderOk, renderDetail)
 
   let hostOutput = ''
-  let hostOk = true
   let hostDetail = ''
   if (skipHost) {
     console.log('  skip  start: host half applies and answers every route  [--skip-host: this environment has no vault]')
@@ -151,7 +150,6 @@ try {
     hostOutput = run('node', [join(repoRoot, 'test', 'host-check.mjs')], { env: { DSH_OBSIDIAN_MODULE: join(installed, 'index.mjs') } })
   } catch (error) {
     hostOutput = String(error.stdout ?? '')
-    hostOk = false
   }
   const lines = hostOutput.split(/\r?\n/)
   const failed = lines.filter(line => line.startsWith('  FAIL '))

@@ -17,7 +17,7 @@ import { resolve } from 'node:path'
 
 const here = fileURLToPath(new URL('.', import.meta.url))
 const { __internals } = await import(pathToFileURL(resolve(here, '..', 'index.mjs')).href)
-const { candidateApps, configPath } = __internals
+const { candidateApps, configPath, uriDelivery } = __internals
 
 const checks = []
 function expect(label, ok, detail) {
@@ -95,6 +95,28 @@ expect('linux registry defaults to ~/.config',
   String(configPath('linux', {}, '/home/tester')))
 expect('a platform without a home or an environment returns nothing, rather than a broken path',
   configPath('darwin', {}, '') === undefined && configPath('linux', {}, '') === undefined)
+
+// ── How the `obsidian://` URI is delivered ───────────────────────────────────
+// macOS: `open` is the registered handler for the scheme, and the app binary is NOT a
+// substitute — it is always present, so "run the executable" made the `open` branch
+// unreachable. Asserted here because this machine cannot run the macOS branch.
+expect('darwin: the URI goes through open even though the app binary exists',
+  uriDelivery('darwin', { open: true, app: true }) === 'open',
+  String(uriDelivery('darwin', { open: true, app: true })))
+expect('darwin: the app binary is only the fallback when open is missing',
+  uriDelivery('darwin', { open: false, app: true }) === 'executable')
+expect('darwin: nothing resolvable is reported, not guessed',
+  uriDelivery('darwin', { open: false, app: false }) === undefined)
+expect('win32: a known executable still wins, as it always did',
+  uriDelivery('win32', { app: true, cmd: true }) === 'executable')
+expect('win32: without an executable the URI goes to the shell',
+  uriDelivery('win32', { app: false, cmd: true }) === 'cmd')
+expect('linux: a known executable still wins, as it always did',
+  uriDelivery('linux', { app: true, xdgOpen: true }) === 'executable')
+expect('linux: without one the URI goes to xdg-open',
+  uriDelivery('linux', { app: false, xdgOpen: true }) === 'xdg-open')
+expect('an unknown platform uses the POSIX opener, matching the path list',
+  uriDelivery('freebsd', { app: false, xdgOpen: true }) === 'xdg-open')
 
 const failed = checks.filter(check => !check.ok)
 for (const check of checks) console.log((check.ok ? '  ok   ' : '  FAIL ') + check.label + (check.detail === '' ? '' : '  [' + check.detail + ']'))

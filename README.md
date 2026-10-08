@@ -10,10 +10,19 @@ No build step — `index.mjs` and `client.js` are the running source.
 
 ```sh
 git clone https://github.com/DedsecLemon/dsh-obsidian.git D:/skill/dsh-obsidian
-# then in ~/.dsh/profiles/<your profile>/package.json
-"dsh-obsidian-panel": "link:D:/skill/dsh-obsidian"   # dependencies
-"bundles": ["dsh-obsidian-panel"]                    # dsh.profile.bundles
+# then in ~/.dsh/profiles/<your profile>/package.json:
 ```
+
+```json
+{
+  "dependencies": { "dsh-obsidian-panel": "link:D:/skill/dsh-obsidian" },
+  "dsh": { "profile": { "bundles": ["dsh-obsidian-panel"] } }
+}
+```
+
+The bundle list is **`dsh.profile.bundles`** — **nested**, not a top-level `bundles`. A
+top-level one installs the dependency and never mounts the bundle, so the plugin is
+silently absent. [INSTALL.md](INSTALL.md) has the full copy-paste file.
 
 ## Naming
 
@@ -115,9 +124,8 @@ vault; the conversation Session id is DSH's own bookkeeping and lives under
 | Surface | Kind | Where |
 |---|---|---|
 | Panel body | Client slot | `sidebar.right.pane.tab`, keyed `dsh-obsidian/notes` |
-| Conversation | Shell panel | opened with `uiWorkspace.openSession(vault Session)` — `对话` in the tree panel and on the note page |
-| Conversation seat occupant | Client slot | `dsh-obsidian/panel.conversation`, and `dsh-obsidian/note.conversation` on the note page |
-| Note page body | Client slot | `sidebar.right.pane.tab`, keyed `dsh-obsidian/note` — also declares its own conversation child |
+| Conversation | Shell panel | opened with `uiWorkspace.openSession(vault Session)` — `对话` in the tree panel and on the note page; this plugin declares **no** seat and renders none of it |
+| Note page body | Client slot | `sidebar.right.pane.tab`, keyed `dsh-obsidian/note` |
 | Note outline | Client UI | the note page's `大纲` panel, anchored to the `dsh-obsidian-outline-*` ids `renderMarkdown` puts on headings |
 | Launcher row | Client slot | `sidebar.footer.action` (id `dsh-obsidian`) |
 | Tab types | Client service | `sidebarRightTabs.register({ id, kind, patterns, canOpen, title })` |
@@ -322,10 +330,12 @@ it is dropped outright if the vault turns out to be a different one.
 ### Editing looks like reading
 
 `编辑` swaps the rendered page for a `textarea` over the same file, and the two have to
-be the same box: 16px on 1.5, the same `18px 22px 96px` padding, the same typeface. The
-editor used to be 13px monospace with its own padding, so pressing the button reflowed
-the page before a character was typed, and the mode change was the most visible thing
-about it. `mount-check` asserts the editor's metrics against the reading view's.
+be the same box: 16px on 1.5, the same `18px 22px 96px` padding, the same typeface — and
+the same metadata line (size / time / 已截断) above the text. That row existed only in the
+reading view, so pressing the button moved the body up by its height (~24px). The editor
+itself used to be 13px monospace with its own padding, so the mode change was the most
+visible thing about it. `mount-check` asserts the two boxes against **each other**: same
+padding, same font metrics, and the same metadata row on both sides.
 
 ## One slot, one declarer — and why that took the whole plugin down
 
@@ -344,11 +354,11 @@ That throw happens inside `apply`, and the shell answers a failed `apply` by
 the notes panel and the note page did not cost one tab — it cost the entire plugin,
 and the sidebar showed nothing from it at all.
 
-The note page therefore declares its **own** seat, `dsh-obsidian/note.conversation`,
-and occupies it. A different name cannot collide — and declaring a session-scoped
-child is also what EARNS that body the two things a conversation needs, because the
-renderer grants `renderSlot` and `SessionProvider` only to an entry that declares
-one:
+An earlier version answered that by having the note page declare its **own** seat,
+`dsh-obsidian/note.conversation`, and occupy it. A different name cannot collide — and
+declaring a session-scoped child is also what EARNS that body the two things a conversation
+needs, because the renderer grants `renderSlot` and `SessionProvider` only to an entry that
+declares one:
 
 ```js
 if (entry.children !== void 0) {
@@ -364,7 +374,7 @@ its own: without `SessionProvider` the factory has no session scope to render, w
 is why a factory-only note page showed "no seat and no factory" instead of a
 conversation.
 
-That is the mechanism an earlier version used to host a conversation of its own. The
+That was the mechanism an earlier version used to host a conversation of its own. The
 current plugin declares no child slot, so it never receives `renderSlot`/`SessionProvider`
 — and does not need them: the vault conversation is drawn by the shell's Conversation
 panel, which the plugin reaches by Session id.
@@ -439,13 +449,25 @@ Nothing is hard-coded to one install. At call time the host half:
 1. reads `%APPDATA%\obsidian\obsidian.json` — Obsidian's own vault registry —
    and picks the most recently opened vault (the vault name Obsidian's URI
    handler expects is the folder basename);
-2. locates `Obsidian.exe` from `DSH_OBSIDIAN_APP`, then the common install
-   locations;
-3. launches it with `obsidian://open?vault=<vault>[&file=<file>]`.
+2. locates the Obsidian executable (`Obsidian.exe` on Windows, the app binary on macOS,
+   an AppImage or a distro package on Linux) from `DSH_OBSIDIAN_APP`, then the common
+   install locations;
+3. delivers `obsidian://open?vault=<vault>[&file=<file>]` to it.
 
 An already-running Obsidian is *focused* rather than duplicated, because
-Obsidian enforces single-instance itself. If no executable is found, the launch
-falls back to Windows' registered `obsidian://` protocol handler.
+Obsidian enforces single-instance itself. Which channel delivers the URI depends on the
+platform: a known executable on Windows and Linux, and **`open` on macOS**, where launching
+the app binary with the URI as argv does not deliver it. That binary is always present, so
+"run the executable" used to win there and the `open` path was unreachable — the direct
+binary is now only the fallback for a macOS machine where `open` cannot be resolved.
+Windows falls back to its registered `obsidian://` handler (`cmd /c start`) and Linux to
+`xdg-open`. `test/platform-check.mjs` asserts the choice for all three platforms.
+
+**Known limitation, stated plainly: the macOS path was never run on macOS.** No Mac was
+available, so what is asserted is the selection logic (`open` wins whenever it resolves),
+which is verifiable offline; the actual handoff to Obsidian on a Mac has not been exercised.
+The macOS and Linux path lists and registry paths are in the same position — asserted, not
+run.
 
 `GET /dsh-obsidian/status` reports exactly what resolved.
 
@@ -544,21 +566,20 @@ responded by **retiring the tab body** — so the right Sidebar came up blank wi
 nothing in the product pointing at the cause. That class of bug is only visible to
 a real mount.
 
-It is also where the two defects that shipped to the user were caught by
-regression: the box retaining its Session on **every** render (the resolver had a
-fresh identity each time, so the acquire effect re-ran in a loop), and the phase
-expectations that came with suppressing the Hero.
+It is also where the defect that shipped to the user was caught by regression: the box
+retaining its Session on **every** render (the resolver had a fresh identity each time, so
+the acquire effect re-ran in a loop).
 
 `render-check.cjs` covers the wiring that cannot be seen by eye: that the tab
-type's `id` equals its body seat key, that the panel body declares its own
-conversation seat and occupies it, that the conversation never renders the Hero,
-that there is exactly one footer row and no conversation tab, that `sessions`,
-`workspaces` and `uiWorkspace` are **not** in `inject` (and that reading any of
-them as a property throws), that an unrecognised Session snapshot is handed to the
-factory with the selector actually invoked, that a profile without Sessions still
-registers and renders the tree panel, and that an unknown vault root is a
-`no-path` refusal rather than an `@undefined` mention. It also pins the Obsidian
-reading-view typography and the GFM table.
+type's `id` equals its body seat key, that the plugin declares **no** slot child at all
+(and that a second declaration of one slot is refused), that there is exactly one footer
+row and no conversation tab, that `sessions`, `workspaces` and `uiWorkspace` are **not**
+in `inject` (and that reading any of them as a property throws), that the tree panel
+renders without Sessions and points at the conversation through the marker the client half
+actually writes, and that an unknown vault root is a `no-path` refusal rather than an
+`@undefined` mention. It also pins the Obsidian reading-view typography and the GFM table,
+and — so that an assertion on a marker nothing writes cannot rot again — fails if either
+client harness queries a `data-dsh-obsidian-*` marker that `client.js` does not contain.
 
 `host-check.mjs` drives all nine routes against the real vault and asserts that
 the conversation Session id lands under `DSH_HOME` rather than inside the vault —

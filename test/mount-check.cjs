@@ -348,10 +348,14 @@ step('mount the tab body', async () => {
 
 step('the panel hands the vault conversation to the shell, which shows it in the centre', async () => {
   // The tree panel hosts no conversation at all: not a footer, not a dialog, not a
-  // page. It offers the way to one — the shell's own conversation panel.
-  if (host.querySelector('[data-dsh-obsidian-chat-page]') !== null
-    || host.querySelector('[data-dsh-obsidian-chat-dock]') !== null) {
+  // page. It offers the way to one — the shell's own conversation panel. A conversation
+  // of its own would render `renderSlot`'s output, and this entry declares no child
+  // slot; the control that exists is pinned by the marker the client half writes.
+  if (host.textContent.includes('CONVERSATION_SEAT')) {
     throw new Error('a conversation rendered inside the tree panel')
+  }
+  if (host.querySelector('[data-dsh-obsidian-chat-menu]') === null) {
+    throw new Error('the panel has no conversation control marker')
   }
   const open = [...host.querySelectorAll('button')]
     .find((button) => (button.textContent || '').trim() === '对话')
@@ -379,7 +383,9 @@ step('the panel hands the vault conversation to the shell, which shows it in the
   }
   // Nothing was retained by the plugin: the shell holds the Session it displays.
   if (retained.length !== 0) throw new Error('the plugin retained ' + retained.length + ' Session(s) of its own')
-  if (host.querySelector('[data-dsh-obsidian-chat-page]') !== null) {
+  // Opening the conversation leaves this panel's own layout alone: the tree is still
+  // there, and the control is still the control.
+  if (host.querySelector('input') === null || host.querySelector('[data-dsh-obsidian-chat-menu]') === null) {
     throw new Error('opening the conversation changed the panel\'s own layout')
   }
   // Selecting another Session hands the right Sidebar a fresh tab set, so the panel
@@ -581,6 +587,14 @@ step('the note page edits the file and saves it back', async () => {
   }))
   await flush()
 
+  // The reading view FIRST, because the two modes have to be one box and are compared to
+  // each other. With the metadata line (size / time / 已截断) only on the reading side,
+  // pressing 编辑 moved the body up by that row's height (~24px).
+  const readBody = container.querySelector('[data-dsh-obsidian-note-body="read"]')
+  if (readBody === null) throw new Error('the reading view has no body box')
+  const readMeta = readBody.querySelector('[data-dsh-obsidian-note-meta="read"]')
+  if (readMeta === null) throw new Error('the reading view is missing its metadata line')
+
   const editButton = [...container.querySelectorAll('button')]
     .find((button) => (button.textContent || '').includes('编辑'))
   if (editButton === undefined) throw new Error('the note page has no edit control')
@@ -590,15 +604,34 @@ step('the note page edits the file and saves it back', async () => {
   const textarea = container.querySelector('textarea')
   if (textarea === null) throw new Error('edit mode did not open an editor')
   if (textarea.value !== NOTE) throw new Error('the editor did not start from the file content')
-  // The editor must be the SAME box as the reading view. It used to be 13px monospace
-  // with its own padding, so pressing 编辑 reflowed the page before a character was
-  // typed — the mode change was the most visible thing about it.
+
+  // Both modes are asserted to be structurally the same: the same padded box, and the same
+  // metadata line above the text. The editor used to be 13px monospace with its own
+  // padding — the mode change was the most visible thing about it.
+  const editBody = container.querySelector('[data-dsh-obsidian-note-body="edit"]')
+  if (editBody === null) throw new Error('edit mode has no body box')
+  const editMeta = editBody.querySelector('[data-dsh-obsidian-note-meta="edit"]')
+  if (editMeta === null) {
+    throw new Error('edit mode is missing the metadata line, so the body shifts when it opens')
+  }
+  if (editMeta.textContent !== readMeta.textContent) {
+    throw new Error('the two modes show different metadata: '
+      + JSON.stringify(editMeta.textContent) + ' vs ' + JSON.stringify(readMeta.textContent))
+  }
+  for (const metric of ['padding', 'fontSize', 'lineHeight']) {
+    if (editBody.style[metric] !== readBody.style[metric]) {
+      throw new Error('the editor box differs from the reading box in ' + metric + ': '
+        + editBody.style[metric] + ' vs ' + readBody.style[metric])
+    }
+  }
+  if (readBody.style.padding !== '18px 22px 96px' || readBody.style.fontSize !== '16px'
+    || readBody.style.lineHeight !== '1.5') {
+    throw new Error('the reading box lost Obsidian\'s metrics: ' + readBody.style.padding
+      + ' / ' + readBody.style.fontSize + ' / ' + readBody.style.lineHeight)
+  }
   if (textarea.style.fontSize !== '16px' || textarea.style.lineHeight !== '1.5') {
     throw new Error('the editor does not match the reading view: '
       + textarea.style.fontSize + ' / ' + textarea.style.lineHeight)
-  }
-  if (textarea.style.padding !== '18px 22px 96px') {
-    throw new Error('the editor keeps its own padding: ' + textarea.style.padding)
   }
   if (textarea.style.fontFamily !== 'inherit') {
     throw new Error('the editor uses a different typeface: ' + textarea.style.fontFamily)
@@ -724,9 +757,11 @@ step('the note page opens the conversation, and quotes the note into the convers
 
   // The note page renders no conversation: it carries the control that hands the
   // vault Session to the shell, which shows it in the centre.
-  if (container.querySelector('[data-dsh-obsidian-chat-page]') !== null
-    || container.querySelector('[data-dsh-obsidian-chat-dock]') !== null) {
+  if (container.textContent.includes('CONVERSATION_SEAT')) {
     throw new Error('the note page rendered a conversation inline')
+  }
+  if (container.querySelector('[data-dsh-obsidian-chat-menu]') === null) {
+    throw new Error('the note page has no control for the conversation')
   }
   const openChat = [...container.querySelectorAll('button')]
     .find((button) => (button.textContent || '').trim() === '对话')
@@ -839,9 +874,15 @@ step('the notes launcher is the only footer row', async () => {
   const rows = captured.filter((entry) => entry.metadata.name === 'sidebar.footer.action')
   if (rows.length !== 1) throw new Error('expected one footer row, got ' + rows.length)
   if (rows[0].metadata.id !== 'dsh-obsidian') throw new Error('the footer row is not the notes launcher')
-  // The conversation must not have a launcher or a tab of its own any more.
-  if (captured.some((entry) => entry.metadata.id === 'dsh-obsidian-chat')) {
-    throw new Error('the conversation still registers its own footer row')
+  // The conversation must not have a launcher or a tab body of its own any more: the only
+  // handles this plugin registers are the notes panel, the note page and the footer row
+  // (its body keys and its footer id). `dsh-obsidian-chat` was the deleted row's id, so
+  // asserting its absence proved nothing — this asserts the whole set instead.
+  const expectedHandles = new Set([api.__internals.TAB_ID, api.__internals.NOTE_TAB_ID, 'dsh-obsidian'])
+  const extra = captured.find((entry) => !expectedHandles.has(String(entry.metadata.key ?? entry.metadata.id ?? '')))
+  if (extra !== undefined) {
+    throw new Error('a surface beyond the notes panel, the note page and its launcher registered: '
+      + String(extra.metadata.key ?? extra.metadata.id))
   }
 })
 
@@ -869,7 +910,7 @@ step('a profile without Sessions still gets the tree, only not the box', async (
   bareRoot.render(React.createElement(panel.component, seatProps))
   await flush()
   if (container.querySelector('input') === null) throw new Error('the tree panel did not mount without Sessions')
-  if (container.querySelector('[data-dsh-obsidian-chat-page]') !== null) {
+  if (container.textContent.includes('CONVERSATION_SEAT')) {
     throw new Error('a conversation mounted inside the tree panel')
   }
 

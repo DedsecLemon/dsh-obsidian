@@ -10,10 +10,19 @@
 
 ```sh
 git clone https://github.com/DedsecLemon/dsh-obsidian.git D:/skill/dsh-obsidian
-# 然后写在 ~/.dsh/profiles/<你的 profile>/package.json 里
-"dsh-obsidian-panel": "link:D:/skill/dsh-obsidian"   # dependencies
-"bundles": ["dsh-obsidian-panel"]                    # dsh.profile.bundles
+# 然后写在 ~/.dsh/profiles/<你的 profile>/package.json 里:
 ```
+
+```json
+{
+  "dependencies": { "dsh-obsidian-panel": "link:D:/skill/dsh-obsidian" },
+  "dsh": { "profile": { "bundles": ["dsh-obsidian-panel"] } }
+}
+```
+
+bundle 列表在 **`dsh.profile.bundles`** —— **嵌套**字段,**不是顶层 `bundles`**。写成顶层的话
+依赖会装上、bundle 永远不会挂载,插件就这样静默消失。完整可抄的整份文件见
+[INSTALL.zh-CN.md](INSTALL.zh-CN.md)。
 
 ## 命名
 
@@ -88,9 +97,8 @@ Obsidian 的注册表只是一个**猜测**,不是答案。第一次运行时,�
 | 表面 | 类型 | 位置 |
 |---|---|---|
 | 面板主体 | 客户端 slot | `sidebar.right.pane.tab`,key 为 `dsh-obsidian/notes` |
-| 对话 | shell 面板 | 用 `uiWorkspace.openSession(知识库 Session)` 打开 —— 目录树面板和笔记页上的 `对话` |
-| 对话座位的占用者 | 客户端 slot | `dsh-obsidian/panel.conversation`,笔记页上则是 `dsh-obsidian/note.conversation` |
-| 笔记页主体 | 客户端 slot | `sidebar.right.pane.tab`,key 为 `dsh-obsidian/note` —— 同时声明它自己的对话子节点 |
+| 对话 | shell 面板 | 用 `uiWorkspace.openSession(知识库 Session)` 打开 —— 目录树面板和笔记页上的 `对话`;本插件**不声明任何座位**,也不渲染它 |
+| 笔记页主体 | 客户端 slot | `sidebar.right.pane.tab`,key 为 `dsh-obsidian/note` |
 | 笔记大纲 | 客户端 UI | 笔记页的 `大纲` 面板,锚点是 `renderMarkdown` 写在标题上的 `dsh-obsidian-outline-*` id |
 | 启动行 | 客户端 slot | `sidebar.footer.action`(id `dsh-obsidian`) |
 | 标签页类型 | 客户端服务 | `sidebarRightTabs.register({ id, kind, patterns, canOpen, title })` |
@@ -185,7 +193,7 @@ GFM 表格会渲染成表格。在这之前,它渲染成一段由竖线组成的
 
 ### 编辑态和阅读态是同一个盒子
 
-`编辑` 把渲染好的一页换成同一文件的 `textarea`,两者必须是同一个盒子:16px、行高 1.5、同样的 `18px 22px 96px` 内边距、同样的字体。编辑器原先用的是 13px 等宽字体加自己的内边距,于是按一下按钮、还没输入一个字,页面就重排了 —— 模式切换成了这个功能里最显眼的东西。`mount-check` 会把编辑器的这些度量跟阅读视图对一遍。
+`编辑` 把渲染好的一页换成同一文件的 `textarea`,两者必须是同一个盒子:16px、行高 1.5、同样的 `18px 22px 96px` 内边距、同样的字体 —— 以及正文上方**同一行元信息**(大小 / 时间 / 已截断)。那一行原先只存在于阅读态,所以按一下按钮正文就上移了它的高度(约 24px)。编辑器本身原先用的是 13px 等宽字体加自己的内边距,模式切换成了这个功能里最显眼的东西。`mount-check` 会把两个盒子**互相对比**:同样的内边距、同样的字体度量、两边都有同一行元信息。
 
 ## 一个 slot,一个声明者 —— 以及它为什么能让整个插件倒下
 
@@ -200,7 +208,7 @@ if (options.children) for (const childKey of Object.keys(options.children)) {
 
 这个抛错发生在 `apply` 里面,而 shell 对 `apply` 失败的处理是**回滚这个插件做过的每一次注册**。所以从笔记面板和笔记页两处都声明这个座位,代价不是少一个标签页 —— 而是整个插件,侧栏里什么都看不到。
 
-因此笔记页声明**自己的**座位 `dsh-obsidian/note.conversation`,并占住它。不同的名字不会撞车 —— 而且声明一个 session 作用域的子节点,恰恰也是让那个主体**挣到**对话所需那两样东西的原因:渲染器只把 `renderSlot` 和 `SessionProvider` 发给声明了子节点的条目:
+早先的版本是这样解决的:笔记页声明**自己的**座位 `dsh-obsidian/note.conversation`,并占住它。不同的名字不会撞车 —— 而且声明一个 session 作用域的子节点,恰恰也是让那个主体**挣到**对话所需那两样东西的原因:渲染器只把 `renderSlot` 和 `SessionProvider` 发给声明了子节点的条目:
 
 ```js
 if (entry.children !== void 0) {
@@ -245,10 +253,12 @@ if (entry.children !== void 0) {
 
 1. 读取 `%APPDATA%\obsidian\obsidian.json` —— Obsidian 自己的知识库注册表 ——
    并挑出最近打开过的那个知识库(Obsidian 的 URI 处理器期望的知识库名,就是文件夹的基本名);
-2. 依次从 `DSH_OBSIDIAN_APP`、常见安装位置定位 `Obsidian.exe`;
-3. 用它启动:`obsidian://open?vault=<vault>[&file=<file>]`。
+2. 依次从 `DSH_OBSIDIAN_APP`、常见安装位置定位 Obsidian 可执行文件(Windows 的 `Obsidian.exe`、macOS 的 app 二进制、Linux 的 AppImage 或发行版包);
+3. 把 `obsidian://open?vault=<vault>[&file=<file>]` 交给它。
 
-已经在运行的 Obsidian 会被*聚焦*,而不是再开一个,因为 Obsidian 自己就强制单实例。如果找不到可执行文件,启动会退回 Windows 注册的 `obsidian://` 协议处理器。
+已经在运行的 Obsidian 会被*聚焦*,而不是再开一个,因为 Obsidian 自己就强制单实例。URI 走哪条通道交付取决于平台:Windows 和 Linux 用已知的可执行文件,**macOS 用 `open`** —— 在 macOS 上直接执行 app 二进制、把 URI 当 argv 传进去并不能交付它,而那个二进制总是存在,所以「直接跑二进制」原先总是抢先、`open` 那条路根本不可达。现在直接执行二进制只是 macOS 上解析不到 `open` 时的后备。Windows 后备到注册的 `obsidian://` 处理器(`cmd /c start`),Linux 后备到 `xdg-open`。三种平台的选择由 `test/platform-check.mjs` 断言。
+
+**已知限制,如实写明:macOS 这条路没有在 macOS 上跑过。** 手边没有 Mac,所以被断言的是选择逻辑(只要 `open` 能解析到就选它),这部分可以离线验证;真正在 Mac 上交给 Obsidian 的那一步没有实跑过。macOS/Linux 的路径清单和注册表路径同样处于「被断言、未被实跑」的状态。
 
 `GET /dsh-obsidian/status` 会如实报告解析出了什么。
 
@@ -293,9 +303,9 @@ node test/host-check.mjs     # drives every route against the real vault
 
 `mount-check.cjs` 之所以存在,是因为服务端渲染不够。它带着面板走一遍 挂载 → 目录树 → 展开 → 笔记 → 大纲 → 对话 → 返回 → 搜索 → 启动行,而且 effect 是真的在跑。这个插件的第一个版本在自己声明之前用了 `const`:抛错发生在 passive mount effect 里,而 SSR 从不执行它,slot 框架的条目边界则以**把这个标签页主体 retire 掉**作为回应 —— 于是右侧栏打开是空的,产品里没有任何东西指向原因。这一类 bug 只有真实挂载才看得见。
 
-它也是用回归测试抓住那两个流到用户手上的缺陷的地方:这个框在**每一次**渲染时都 retain 它的 Session(resolver 每次都是新标识,于是 acquire effect 在循环里重跑),以及抑制 Hero 之后随之而来的那些阶段期望。
+它也是用回归测试抓住那个流到用户手上的缺陷的地方:这个框在**每一次**渲染时都 retain 它的 Session(resolver 每次都是新标识,于是 acquire effect 在循环里重跑)。
 
-`render-check.cjs` 覆盖那些肉眼看不见的接线:标签页类型的 `id` 等于它主体座位的 key;面板主体声明了自己的对话座位并占住它;对话从不渲染 Hero;footer 行恰好只有一行、且没有对话标签页;`sessions`、`workspaces` 和 `uiWorkspace` **不在** `inject` 里(并且以属性方式读它们任意一个都会抛错);无法识别的 Session 快照会带着真正被调用的 selector 交给工厂;一个没有 Sessions 的 profile 仍然能注册并渲染目录树面板;未知的知识库根是 `no-path` 拒绝,而不是一个 `@undefined` 提及。它还钉住了 Obsidian 阅读视图的排版和 GFM 表格。
+`render-check.cjs` 覆盖那些肉眼看不见的接线:标签页类型的 `id` 等于它主体座位的 key;本插件**一个子 slot 都不声明**(并且同一个座位声明两次会被拒绝);footer 行恰好只有一行、且没有对话标签页;`sessions`、`workspaces` 和 `uiWorkspace` **不在** `inject` 里(并且以属性方式读它们任意一个都会抛错);没有 Sessions 的 profile 里目录树面板照常渲染,并且用客户端半真正写出的那个标记指向对话;未知的知识库根是 `no-path` 拒绝,而不是一个 `@undefined` 提及。它还钉住了 Obsidian 阅读视图的排版和 GFM 表格;并且为了防止「断言一个源码里根本不存在的标记」再次腐烂,只要两个客户端 harness 查询了 `client.js` 里没有的 `data-dsh-obsidian-*` 标记,它就会失败。
 
 `host-check.mjs` 对着真实的知识库跑全部九个路由,并断言对话的 Session id 落在 `DSH_HOME` 下、而不是知识库内部 —— 而且是对着**真实的**存储路径,因为旧断言指的那个文件这个插件从不写。它还断言 `.git/config`、`.mcp.json` 和 `.obsidian/*` 既读不到也列不出,非笔记文件读不到,`PUT`/`DELETE` 是 `405`,`/diag` 能往返,写不到磁盘的 chat 写入是带路径的 `400`,以及 8 MB 的 body 是 `413`、且它的读取提前停止了。
 

@@ -26,6 +26,25 @@ const { renderToStaticMarkup } = resolveFrom('react-dom/server')
 const CLIENT_PATH = process.env.DSH_OBSIDIAN_CLIENT ?? join(__dirname, '..', 'client.js')
 const source = readFileSync(CLIENT_PATH, 'utf8')
 
+// ── every marker the harnesses query must exist in the source ──────────────
+// A harness that asserts on `data-dsh-obsidian-chat-*` while the client half contains no
+// such string passes forever and proves nothing. That is exactly how five assertions here
+// (and in mount-check) quietly rotted after the draggable conversation box was deleted:
+// they were reworded to strings nothing writes, and stayed green. So every marker inside a
+// quoted literal — which is where selectors and `includes(...)` arguments live — is checked
+// against the half under test. It runs FIRST, before anything is registered, so a stale
+// marker is reported as this failure rather than as whatever its assertion does next.
+for (const harness of ['render-check.cjs', 'mount-check.cjs']) {
+  const text = readFileSync(join(__dirname, harness), 'utf8')
+  for (const literal of text.matchAll(/'[^'\r\n]*'|"[^"\r\n]*"/g)) {
+    for (const marker of literal[0].match(/data-dsh-obsidian[a-z0-9-]*/g) ?? []) {
+      if (!source.includes(marker)) {
+        throw new Error('the harness queries "' + marker + '" but the client half never writes it')
+      }
+    }
+  }
+}
+
 let registration = null
 const windowStub = {
   __ModuleLoader__: { load: (value) => { registration = value } },
@@ -296,14 +315,20 @@ if (registered.some((entry) => entry.metadata.key === 'duplicate-declaration-pro
     throw new Error('the note page vanished when Sessions were missing')
   }
   const markup = renderToStaticMarkup(React.createElement(panel.component, {
-    renderSlot: () => null,
+    renderSlot: () => React.createElement('div', null, 'CONVERSATION_SEAT'),
     SessionProvider: (props) => props.children,
     inputActions: { setDraft: () => {} },
   }))
   if (!markup.includes('搜索整个库')) throw new Error('the tree panel did not render without Sessions')
-  // The way in must be there and must SAY so rather than doing nothing: the click runs
-  // `openVaultConversation`, which reports the missing navigation.
-  if (!markup.includes('对话')) throw new Error('the panel lost its way into the conversation')
+  // The way in must be there and must SAY so rather than doing nothing. `对话` alone was
+  // too generic to prove that — any label containing those two characters passed — so the
+  // control is pinned by the marker the client half actually writes.
+  if (!markup.includes('data-dsh-obsidian-chat-menu')) {
+    throw new Error('the panel lost its way into the conversation')
+  }
+  if (markup.includes('CONVERSATION_SEAT')) {
+    throw new Error('the panel rendered a conversation seat it does not declare')
+  }
 }
 for (const entry of registered) {
   if (typeof entry.component !== 'function') throw new Error('slot ' + entry.metadata.name + ' has no component')
@@ -340,12 +365,17 @@ if (!rendered.panel.includes('搜索整个库')) throw new Error('panel is missi
 if (rendered.panel.includes('渲染失败')) {
   throw new Error('the notes panel threw while rendering: ' + rendered.panel.slice(0, 240))
 } 
-// The conversation is NOT in this panel's markup: the shell shows it in the centre,
-// so the only thing the tree panel owes the reader is the control that opens it.
-if (rendered.panel.includes('data-dsh-obsidian-chat-page') || rendered.panel.includes('data-dsh-obsidian-chat-dock')) {
+// The conversation is NOT in this panel's markup: the shell shows it in the centre, so
+// the only thing the tree panel owes the reader is the control that opens it. That control
+// is pinned by the marker the client half writes, and a conversation seat would show up as
+// `renderSlot`'s own output — which this entry must never render, because it declares no
+// child slot. (These two used to be asserted as `data-dsh-obsidian-chat-page` /
+// `-chat-dock`, strings the source stopped containing when the draggable box was deleted —
+// assertions that could never fail. See the marker meta-check at the top of this file.)
+if (rendered.panel.includes('CONVERSATION_SEAT')) {
   throw new Error('a conversation rendered inside the tree panel')
 }
-if (!rendered.panel.includes('对话')) {
+if (!rendered.panel.includes('data-dsh-obsidian-chat-menu')) {
   throw new Error('the notes panel has no control for the conversation')
 }
 // Wide renders the visible label; the 56px rail keeps it to the icon, with the

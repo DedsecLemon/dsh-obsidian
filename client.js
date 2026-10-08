@@ -136,8 +136,8 @@ window.__ModuleLoader__.load({
 		 * (`cannot get property "X" without inject`), and declaring a service the
 		 * profile does not hand out holds the whole entry back from activating — the
 		 * sidebar then loses the plugin entirely. `ctx.get` is the door that costs
-		 * nothing when the service is absent, so a missing Sessions/Workspaces costs
-		 * the conversation box and nothing else.
+		 * nothing when the service is absent, so missing Sessions/Workspaces costs
+		 * only the conversation, never the tree.
 		 */
 		function serviceOf(ctx, name) {
 			try {
@@ -1280,7 +1280,7 @@ window.__ModuleLoader__.load({
 			}, '重试');
 		}
 
-		// Memoised: a pointermove on the conversation grip re-renders the panel, and
+		// Memoised: typing in the search box re-renders the panel on every keystroke, and
 		// without this every visible tree row re-renders with it.
 		const TreeNode = React.memo(function TreeNode(props) {
 			const node = props.node;
@@ -2098,10 +2098,10 @@ window.__ModuleLoader__.load({
 
 				const name = path === undefined ? '' : String(path).split('/').pop();
 
-				// Memoised: dragging the conversation grip re-renders this page on every
-				// pointermove, and re-parsing the whole note each time is the one
-				// expensive thing here. Only the note (or the link navigator) can change
-				// what the Markdown becomes.
+				// Memoised: editing re-renders this page on every keystroke, and
+				// re-parsing the whole note each time is the one expensive thing here.
+				// Only the note (or the link navigator) can change what the Markdown
+				// becomes.
 				const renderedMarkdown = React.useMemo(
 					() => (note === null ? null : renderMarkdown(note.text, navigate, outlineAnchors)),
 					[note, navigate, outlineAnchors],
@@ -2172,6 +2172,29 @@ window.__ModuleLoader__.load({
 					if (editing) setOutlineOpen(false);
 				}, [editing]);
 
+				// The metadata line (size / time / truncated) the reading view shows above
+				// the body. Edit mode renders the SAME line, so pressing 编辑 does not
+				// move the text: with it only on the reading side, the body jumped up by
+				// this row's height (~24px) and the two modes were not "the same box"
+				// after all. `mode` is what the harness compares the two boxes by.
+				const noteMeta = (mode) => h('div', {
+					key: 'meta',
+					'data-dsh-obsidian-note-meta': mode,
+					style: {
+						fontSize: 11.5,
+						lineHeight: 1.4,
+						color: T.labelSecondary,
+						marginBottom: 8,
+						display: 'flex',
+						gap: 9,
+						flexWrap: 'wrap',
+					},
+				}, [
+					h('span', { key: 's' }, formatBytes(note.size)),
+					h('span', { key: 't' }, formatTime(note.mtimeMs)),
+					note.truncated ? h('span', { key: 'tr', style: { color: T.error } }, '已截断') : null,
+				]);
+
 				const body = error !== ''
 					? h('div', { style: { padding: 16, color: T.error, fontSize: 12.5 } }, error)
 					: note === null
@@ -2179,19 +2202,15 @@ window.__ModuleLoader__.load({
 							style: { padding: 16, fontSize: 12, color: T.labelSecondary },
 						}, loading ? '读取笔记中…' : '')
 						: editing
-							? h('textarea', {
+							? h('div', {
 								key: 'edit',
-								value: draftText,
-								onChange: (event) => setDraftText(event.target.value),
-								spellCheck: false,
+								'data-dsh-obsidian-note-body': 'edit',
 								style: {
 									flex: '1 1 auto',
 									minHeight: 0,
-									width: '100%',
 									boxSizing: 'border-box',
-									border: 'none',
-									outline: 'none',
-									resize: 'none',
+									display: 'flex',
+									flexDirection: 'column',
 									// The SAME box as the reading view: entering edit mode must not
 									// reflow the page the reader was just looking at. A monospace
 									// 13px editor against a 16px proportional reading view made the
@@ -2199,15 +2218,36 @@ window.__ModuleLoader__.load({
 									// different document — the mode change was visible before a
 									// single character was typed.
 									padding: '18px 22px 96px',
-									background: 'transparent',
-									color: 'inherit',
-									fontFamily: 'inherit',
 									fontSize: READ.size,
 									lineHeight: READ.lineHeight,
 								},
-							})
+							}, [
+								noteMeta('edit'),
+								h('textarea', {
+									key: 'editor',
+									value: draftText,
+									onChange: (event) => setDraftText(event.target.value),
+									spellCheck: false,
+									style: {
+										flex: '1 1 auto',
+										minHeight: 0,
+										width: '100%',
+										boxSizing: 'border-box',
+										border: 'none',
+										outline: 'none',
+										resize: 'none',
+										padding: 0,
+										background: 'transparent',
+										color: 'inherit',
+										fontFamily: 'inherit',
+										fontSize: READ.size,
+										lineHeight: READ.lineHeight,
+									},
+								}),
+							])
 							: h('div', {
 								key: 'read',
+								'data-dsh-obsidian-note-body': 'read',
 								// Obsidian's reading-view metrics: the base size and line height
 								// every ratio inside `renderMarkdown` is expressed against.
 								style: {
@@ -2216,22 +2256,7 @@ window.__ModuleLoader__.load({
 									lineHeight: READ.lineHeight,
 								},
 							}, [
-								h('div', {
-									key: 'meta',
-									style: {
-										fontSize: 11.5,
-										lineHeight: 1.4,
-										color: T.labelSecondary,
-										marginBottom: 8,
-										display: 'flex',
-										gap: 9,
-										flexWrap: 'wrap',
-									},
-								}, [
-									h('span', { key: 's' }, formatBytes(note.size)),
-									h('span', { key: 't' }, formatTime(note.mtimeMs)),
-									note.truncated ? h('span', { key: 'tr', style: { color: T.error } }, '已截断') : null,
-								]),
+								noteMeta('read'),
 								h('div', { key: 'md' }, renderedMarkdown),
 							]);
 
@@ -2691,10 +2716,10 @@ window.__ModuleLoader__.load({
 		exports.apply = apply;
 		// Only services whose ABSENCE may keep the plugin off the page are listed.
 		// `sessions` and `workspaces` used to be here, and that is what made the
-		// conversation box's degradation branch unreachable: a profile without them
-		// held the entire entry back ("1 entry did not activate"), so `apply` never
-		// ran and the sidebar lost the plugin — tree included. Both are now looked up
-		// lazily through `ctx.get`.
+		// "the conversation is unavailable while the tree still works" branch
+		// unreachable: a profile without them held the entire entry back
+		// ("1 entry did not activate"), so `apply` never ran and the sidebar lost the
+		// plugin — tree included. Both are now looked up lazily through `ctx.get`.
 		const INJECT = ['slots', 'sidebarRightTabs', 'sidebarRight'];
 		// `uiWorkspace` is deliberately NOT in this list either, for the same reason:
 		// it is looked up lazily in `chooseVault`, so a missing picker costs one

@@ -697,6 +697,35 @@ function describeTarget(ctx) {
 }
 
 /**
+ * How one `obsidian://` URI is handed to the operating system.
+ *
+ * macOS: `open`, the system's registered handler for a URI scheme. Executing
+ * `/Applications/Obsidian.app/Contents/MacOS/Obsidian` and passing the URI as argv does
+ * NOT deliver it — Obsidian reads no URI from argv — and that binary is always present,
+ * so "run the app" used to win on macOS and the `open` branch was unreachable.
+ *
+ * Windows and Linux keep the order they always had: a known executable first (Obsidian.exe
+ * on Windows), the platform's opener when there is none. On macOS `open` comes first and
+ * the app binary is only the fallback for a machine where `open` cannot be resolved.
+ *
+ * A pure function of `(platform, available)` so the choice is assertable from any machine
+ * — a macOS-only branch nobody here can run is exactly how this rotted.
+ *
+ * @param platform - `process.platform`.
+ * @param available - what resolved here: `{ open, app, cmd, xdgOpen }` booleans.
+ * @returns 'open' | 'executable' | 'cmd' | 'xdg-open' | undefined (nothing to try).
+ */
+function uriDelivery(platform, available) {
+  if (platform === 'darwin') {
+    if (available.open) return 'open'
+    return available.app ? 'executable' : undefined
+  }
+  if (available.app) return 'executable'
+  if (platform === 'win32') return available.cmd ? 'cmd' : undefined
+  return available.xdgOpen ? 'xdg-open' : undefined
+}
+
+/**
  * Launch Obsidian. An already-running instance is focused by Obsidian's own
  * single-instance handling, so this never opens a second window.
  * @param ctx - plugin context owning the subprocess service.
@@ -712,7 +741,32 @@ async function openObsidian(ctx, file) {
     ? target.vaultPath
     : process.cwd()
 
-  if (target.app !== undefined) {
+  // An opener that is not installed is a miss, not a failure: only the branch that is
+  // actually taken may throw. `resolveExecutable` is what finds the command.
+  const optional = async (name) => {
+    try {
+      const resolved = await subprocess.resolveExecutable(name)
+      return typeof resolved === 'string' && resolved !== '' ? resolved : undefined
+    } catch {
+      return undefined
+    }
+  }
+
+  const platform = process.platform
+  // Only an opener that could actually be taken is probed: resolving `cmd.exe` on macOS is
+  // a guaranteed miss, and on Windows and Linux a known executable already wins.
+  const wantsOpener = platform === 'darwin' || target.app === undefined
+  const open = platform === 'darwin' ? await optional('open') : undefined
+  const cmd = wantsOpener && platform === 'win32' ? await optional('cmd.exe') : undefined
+  const xdgOpen = wantsOpener && platform !== 'win32' && platform !== 'darwin' ? await optional('xdg-open') : undefined
+  const delivery = uriDelivery(platform, {
+    open: open !== undefined,
+    app: target.app !== undefined,
+    cmd: cmd !== undefined,
+    xdgOpen: xdgOpen !== undefined,
+  })
+
+  if (delivery === 'executable') {
     const resolved = await subprocess.resolveExecutable(target.app)
     const handle = subprocess.spawn({
       argv: [resolved, uri],
@@ -726,17 +780,21 @@ async function openObsidian(ctx, file) {
     return { opened: true, uri, vault: target.vaultName ?? '', app: resolved, via: 'executable' }
   }
 
-  // No configured executable: hand the URI to the platform's own protocol handler, which
-  // is what the reader's default-browser-style registration is for. Windows needs a
-  // shell (`start`), macOS and Linux both ship an opener.
-  const platform = process.platform
-  const opener = platform === 'win32'
-    ? { argv: [await subprocess.resolveExecutable('cmd.exe'), '/c', 'start', '', uri] }
-    : platform === 'darwin'
-      ? { argv: [await subprocess.resolveExecutable('open'), uri] }
-      : { argv: [await subprocess.resolveExecutable('xdg-open'), uri] }
+  // No executable to run (or macOS, where `open` is the supported route): hand the URI to
+  // the platform's own protocol handler, which is what the reader's default registration
+  // is for. Windows needs a shell (`start`), macOS and Linux both ship an opener.
+  const argv = delivery === 'open'
+    ? [open, uri]
+    : delivery === 'cmd'
+      ? [cmd, '/c', 'start', '', uri]
+      : delivery === 'xdg-open'
+        ? [xdgOpen, uri]
+        : undefined
+  if (argv === undefined) {
+    throw new Error('dsh-obsidian: no way to open ' + uri + ' on this system')
+  }
   const handle = subprocess.spawn({
-    argv: opener.argv,
+    argv,
     cwd,
     stdio: { stdin: 'ignore', stdout: 'ignore', stderr: 'ignore' },
     graceMs: 3000,
@@ -827,10 +885,11 @@ function allowMethod(req, res) {
  * Pure internals a harness may pin directly.
  *
  * The same idea as the client half's `exports.__internals`: the path resolution the routes
- * are built on, exposed so `test/platform-check.mjs` can assert **every** platform's
- * candidate list and registry path from one machine.
+ * are built on and the URI-delivery choice `openObsidian` makes, exposed so
+ * `test/platform-check.mjs` can assert **every** platform's candidate list, registry path
+ * and opener from one machine.
  */
-export const __internals = Object.freeze({ candidateApps, configPath })
+export const __internals = Object.freeze({ candidateApps, configPath, uriDelivery })
 
 /**
  * Register the plugin's routes and tool against the host.

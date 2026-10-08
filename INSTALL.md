@@ -25,20 +25,26 @@ A DSH plugin hangs off a **profile**; dropping it into a directory is not enough
 ~/.dsh/profiles/<your profile>/package.json
 ```
 
-**a)** Add a line to `dependencies` (with **your own** path):
+The bundle list lives at **`dsh.profile.bundles`** — a **nested** field, **not** a top-level
+`bundles`. That distinction matters: a top-level `bundles` (or a missing one) leaves the
+dependency installed but the bundle **never mounts**, so the plugin is simply absent with no
+error anywhere. The whole file, ready to copy (put in **your own** path; keep any fields the
+profile already has):
 
 ```json
-"dsh-obsidian-panel": "link:D:/skill/dsh-obsidian"
+{
+  "dependencies": {
+    "dsh-obsidian-panel": "link:D:/skill/dsh-obsidian"
+  },
+  "dsh": {
+    "profile": {
+      "bundles": ["dsh-obsidian-panel"]
+    }
+  }
+}
 ```
 
-**b)** Add the package name to the top-level `bundles` array (create the field if it
-does not exist):
-
-```json
-"bundles": ["dsh-obsidian-panel"]
-```
-
-**c)** Run this in that profile directory:
+Then run this in that profile directory:
 
 ```
 pnpm install
@@ -85,7 +91,9 @@ all.
 cd dsh-obsidian
 pnpm install
 node test/render-check.cjs     # client half: registration, render, guards
-node test/mount-check.cjs      # a real jsdom mount: tree, note page, outline, conversation, first run
+node test/mount-check.cjs      # a real jsdom mount: tree, note page, outline, edit mode, first run
+node test/manifest-check.mjs   # the contract declared in package.json
+node test/platform-check.mjs   # per-platform Obsidian locations, registry path and URI opener
 node test/host-check.mjs       # host half: every HTTP route + the security boundary
 node test/profile-lifecycle.mjs  # install → start → uninstall in a throwaway profile (docs/LIFECYCLE.md)
 ```
@@ -95,17 +103,25 @@ node test/profile-lifecycle.mjs  # install → start → uninstall in a throwawa
 > itself, putting them back exactly as they were — **do not delete these files by
 > hand**.
 
-### Why CI runs only the first two harnesses
+### What CI runs, and what it deliberately does not
 
-- `render-check.cjs` and `mount-check.cjs` are completely self-contained — the host
-  is stood in for by a fake `fetch`, so they need no real vault — and therefore
-  **run in CI**.
-- `host-check.mjs` drives the real HTTP routes and asserts things about **what one
-  particular vault contains** (that a given `README.md` exists, that a wikilink
-  resolves, that a note over the read cap is truncated), so it is **local only**.
-  Running it in CI would be testing the fixture, not the plugin.
-- Setting `DSH_OBSIDIAN_APP` lets it run in full (102 checks). Without it, the three
-  checks that depend on where Obsidian is installed are explicitly marked **skip**,
+`.github/workflows/ci.yml` runs **five** harnesses:
+
+- `render-check.cjs` and `mount-check.cjs` are completely self-contained — the host is
+  stood in for by a fake `fetch`, so they need no real vault.
+- `manifest-check.mjs` checks the declarations in `package.json` (compatibility,
+  permissions, bundle identity).
+- `platform-check.mjs` checks the per-platform Obsidian locations, registry path and
+  URI-delivery choice as pure functions, so all three systems are asserted from any
+  one machine.
+- `profile-lifecycle.mjs --skip-host` packs the tarball, installs it into a throwaway
+  profile and runs the client half against the installed copy, then uninstalls it.
+- `host-check.mjs` is deliberately **not** there. It drives the real HTTP routes and
+  asserts things about **what one particular vault contains** (that a given `README.md`
+  exists, that a wikilink resolves, that a note over the read cap is truncated), so it is
+  **local only**. Running it in CI would be testing the fixture, not the plugin.
+- Setting `DSH_OBSIDIAN_APP` lets `host-check` run in full (102 checks). Without it, the
+  three checks that depend on where Obsidian is installed are explicitly marked **skip**,
   never passed off as a success.
 
 `.github/workflows/ci.yml` encodes exactly that split, and this section is kept in
