@@ -241,6 +241,14 @@ A note opens in its own tab, not inline: full-height rendered Markdown with its
 link never loses the page you were reading. The tree stays put in the `知识库`
 panel; the note does not replace it.
 
+A link that points **into this note** — `[[#标题]]`, `[[#标题|别名]]`, or `[x](#锚点)` —
+scrolls instead of resolving. The compiled *高性价比人生指南* writes its whole table of
+contents that way: 45 cells of `[[#第 N 节 …\|N. 短标题]]`, with the alias `|` escaped
+`\|` for the table parser underneath, and routing those through the note resolver made
+every chapter link a dead button. The jump reads the rendered headings' text and `id`s
+rather than parsing the note again, and falls back to a GitHub-style slug for notes that
+were converted with slug anchors. A heading that genuinely is absent says so.
+
 **The typography is Obsidian's, transcribed.** The numbers in `READ` are the
 default theme's own reading-view values — 16px at line-height 1.5, the heading
 ladder (`1.618em`/`1.462em`/`1.318em`/`1.188em`/`1.076em`/`1em`) with its weights
