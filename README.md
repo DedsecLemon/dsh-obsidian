@@ -249,6 +249,16 @@ every chapter link a dead button. The jump reads the rendered headings' text and
 rather than parsing the note again, and falls back to a GitHub-style slug for notes that
 were converted with slug anchors. A heading that genuinely is absent says so.
 
+**A link into another note keeps its anchor.** `[[笔记#标题]]` opens the note *and*
+scrolls to the heading: the opener records the anchor in `pendingAnchors` (keyed by vault
+path) and the receiving page consumes it once it has drawn the note — the target is a
+different tab instance, so it cannot scroll before it has rendered. Obsidian's exact
+heading text wins; an anchor that matches exactly one heading by containment is accepted
+as a courtesy, because this vault's sandplay notes are written that way
+(`[[笔记#整合性]]` for `5.1 整合性 (Integration)`), and an ambiguous one is refused rather
+than guessed. `[[笔记#^block-id]]` lands on a block: a trailing `^id` on a paragraph or
+list item becomes `data-block-id` and never appears as text.
+
 **The typography is Obsidian's, transcribed.** The numbers in `READ` are the
 default theme's own reading-view values — 16px at line-height 1.5, the heading
 ladder (`1.618em`/`1.462em`/`1.318em`/`1.188em`/`1.076em`/`1em`) with its weights

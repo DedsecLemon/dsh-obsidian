@@ -594,6 +594,15 @@ window.__ModuleLoader__.load({
 		const OUTLINE_ID_PREFIX = 'dsh-obsidian-outline-';
 		/** Two note pages can be open at once, so each one numbers its own anchors. */
 		let notePageSeq = 0;
+		/**
+		 * A heading/block to scroll to once its note page has rendered, keyed by vault path.
+		 *
+		 * `[[笔记#标题]]` opens the target as its own tab, so the scroll cannot happen in the
+		 * click: the page that receives the anchor is a different component instance. The
+		 * map is the hand-off — the opener records `path -> anchor`, the opened page takes it
+		 * once the note is drawn. Keyed by path so two pages cannot steal each other's jump.
+		 */
+		const pendingAnchors = new Map();
 
 		/** Theme tokens with fallbacks, so the panel also survives a bare shell. */
 		const T = {
@@ -817,6 +826,50 @@ window.__ModuleLoader__.load({
 		}
 
 		/**
+		 * Resolve an Obsidian anchor against the rendered heading texts.
+		 *
+		 * Exact text is Obsidian's own rule. A converted note often writes an abbreviated
+		 * anchor — this vault has `[[笔记#整合性]]` for a heading `5.1 整合性 (Integration)`
+		 * — so a slug match and then a UNIQUE containment match are allowed. Unique only:
+		 * jumping to a guess is worse than saying the heading was found nowhere.
+		 *
+		 * @returns the matched heading text, or null.
+		 */
+		function matchHeading(texts, anchor) {
+			const wanted = String(anchor === undefined || anchor === null ? '' : anchor)
+				.replace(/\s+/g, ' ')
+				.trim();
+			if (wanted === '') return null;
+			for (const text of texts) {
+				if (String(text).replace(/\s+/g, ' ').trim() === wanted) return text;
+			}
+			const wantedSlug = obsidianSlug(wanted);
+			if (wantedSlug !== '') {
+				for (const text of texts) {
+					if (obsidianSlug(text) === wantedSlug) return text;
+				}
+			}
+			const loose = texts.filter((text) => {
+				const normalized = String(text).replace(/\s+/g, ' ').trim();
+				return normalized.includes(wanted) || wanted.includes(normalized);
+			});
+			return loose.length === 1 ? loose[0] : null;
+		}
+
+		/** `^block-id` at the end of a block marks it for `[[笔记#^block-id]]`. */
+		const RE_BLOCK_ID = /\s\^([A-Za-z0-9-]{2,})\s*$/;
+
+		/**
+		 * Split a trailing `^block-id` off a block's text.
+		 * @returns `{ text, blockId }`, `blockId` empty when the block is not marked.
+		 */
+		function splitBlockId(text) {
+			const match = RE_BLOCK_ID.exec(String(text));
+			if (match === null) return { text: String(text), blockId: '' };
+			return { text: String(text).slice(0, match.index), blockId: match[1] };
+		}
+
+		/**
 		 * Render one line of inline Markdown.
 		 *
 		 * @param text - the line.
@@ -858,8 +911,10 @@ window.__ModuleLoader__.load({
 					// of contents is 45 of these, and routing them through the note resolver
 					// was why clicking a chapter did nothing.
 					const sameNote = anchor !== null && typeof onAnchor === 'function';
-					// `[[笔记#标题]]` opens the note: the heading is not part of its name.
+					// `[[笔记#标题]]` opens the note: the heading is not part of its name, and
+					// the heading travels with the call so the opened page can scroll to it.
 					const noteTarget = anchor !== null ? '' : (hashAt > 0 ? target.slice(0, hashAt).trim() : target);
+					const noteAnchor = anchor === null && hashAt > 0 ? target.slice(hashAt + 1).trim() : '';
 					if (sameNote) {
 						nodes.push(h('button', {
 							key,
@@ -878,11 +933,11 @@ window.__ModuleLoader__.load({
 						nodes.push(h('button', {
 							key,
 							type: 'button',
-							title: '打开 ' + noteTarget,
+							title: noteAnchor === '' ? '打开 ' + noteTarget : '打开 ' + noteTarget + ' 并跳到 ' + noteAnchor,
 							onClick: (event) => {
 								event.preventDefault();
 								event.stopPropagation();
-								onLink(noteTarget);
+								onLink(noteTarget, noteAnchor === '' ? undefined : noteAnchor);
 							},
 							style: linkButtonStyle,
 						}, label.trim()));
@@ -1358,10 +1413,14 @@ window.__ModuleLoader__.load({
 					blocks.push(h(ordered ? 'ol' : 'ul', {
 						key: 'b' + (key += 1),
 						style: { margin: READ.block + ' 0', paddingLeft: READ.listIndent },
-					}, items.map((item, itemIndex) => h('li', {
-						key: itemIndex,
-						style: { padding: READ.listPad + ' 0', lineHeight: READ.lineHeight },
-					}, renderInline(item, 'li' + key + '-' + itemIndex, onLink, onAnchor)))));
+					}, items.map((item, itemIndex) => {
+						const marked = splitBlockId(item);
+						return h('li', {
+							key: itemIndex,
+							...(marked.blockId === '' ? {} : { 'data-block-id': marked.blockId }),
+							style: { padding: READ.listPad + ' 0', lineHeight: READ.lineHeight },
+						}, renderInline(marked.text, 'li' + key + '-' + itemIndex, onLink, onAnchor));
+					})));
 					continue;
 				}
 
@@ -1370,10 +1429,14 @@ window.__ModuleLoader__.load({
 					paragraph.push(lines[i]);
 					i += 1;
 				}
+				const blockMarked = splitBlockId(paragraph.join(' '));
 				blocks.push(h('p', {
 					key: 'b' + (key += 1),
+					// `^block-id` marks a block for `[[笔记#^block-id]]`; the marker itself is
+					// not content, so it never reaches the page.
+					...(blockMarked.blockId === '' ? {} : { 'data-block-id': blockMarked.blockId }),
 					style: { margin: READ.block + ' 0', lineHeight: READ.lineHeight },
-				}, renderInline(paragraph.join(' '), 'p' + key, onLink, onAnchor)));
+				}, renderInline(blockMarked.text, 'p' + key, onLink, onAnchor)));
 			}
 
 			return blocks;
@@ -2398,7 +2461,11 @@ window.__ModuleLoader__.load({
 
 				// A `[[wikilink]]` resolves to its note and opens it as its OWN page, so
 				// following a link never loses the page you were reading.
-				const navigate = React.useCallback((target) => {
+				//
+				// `[[笔记#标题]]` carries the anchor: the opened page is a different component
+				// instance, so the scroll is handed over through `pendingAnchors` and taken
+				// once that page has drawn the note.
+				const navigate = React.useCallback((target, anchor) => {
 					getJson(API.resolve + '?name=' + encodeURIComponent(target)).then((data) => {
 						const found = Array.isArray(data.matches) && data.matches.length > 0
 							? data.matches[0].path
@@ -2407,43 +2474,63 @@ window.__ModuleLoader__.load({
 							keepFeedback('找不到笔记：' + target, 3200);
 							return;
 						}
+						if (typeof anchor === 'string' && anchor !== '') pendingAnchors.set(found, anchor);
 						ctx.sidebarRight.openResource(noteAddress(found));
 					}).catch(() => { keepFeedback('无法解析链接：' + target, 3200); });
 				}, [keepFeedback]);
 
 				/**
-				 * Jump to a heading inside THIS note: `[[#标题]]` and `[x](#锚点)`.
+				 * Jump to an anchor inside THIS note: `[[#标题]]`, `[x](#锚点)`, `[[#^块id]]`,
+				 * and — through the hand-off in `pendingAnchors` — `[[笔记#标题]]` from the
+				 * page that opened this one.
 				 *
 				 * The compiled guide's whole table of contents is written `[[#标题\|别名]]`
 				 * in table cells, so before this every chapter link was a dead button.
 				 * Headings already carry their text and their anchor id, so the jump reads
 				 * the rendered page rather than parsing the note a second time — the same
-				 * discipline the outline uses. Obsidian matches the heading text; a converted
-				 * note may spell the anchor as a slug, so that is the fallback. A heading
-				 * that really is absent says so instead of doing nothing.
+				 * discipline the outline uses. `matchHeading` owns the matching rules, and a
+				 * target that really is absent says so instead of doing nothing.
 				 */
 				const jumpToAnchor = React.useCallback((anchor) => {
 					const host = bodyRef.current;
 					if (host === null) return;
-					const wanted = String(anchor === undefined || anchor === null ? '' : anchor).replace(/\s+/g, ' ').trim();
+					const wanted = String(anchor === undefined || anchor === null ? '' : anchor)
+						.replace(/\s+/g, ' ')
+						.trim();
 					if (wanted === '') return;
-					const nodes = host.querySelectorAll('[data-outline]');
-					let slugMatch = null;
-					const wantedSlug = obsidianSlug(wanted);
-					for (let index = 0; index < nodes.length; index += 1) {
-						const node = nodes[index];
-						const text = String(node.textContent === undefined || node.textContent === null ? '' : node.textContent)
-							.replace(/\s+/g, ' ')
-							.trim();
-						if (text === wanted) {
-							scrollHeadingIntoView(node);
+					// `#^block-id`: a marked block, not a heading. Blocks carry the id as a
+					// data attribute; the marker itself was stripped at render time.
+					if (wanted.charAt(0) === '^') {
+						const blockId = wanted.slice(1).trim();
+						const marked = blockId === ''
+							? null
+							: host.querySelector('[data-block-id="' + blockId.replace(/["\\]/g, '') + '"]');
+						if (marked !== null) {
+							scrollHeadingIntoView(marked);
 							return;
 						}
-						if (slugMatch === null && wantedSlug !== '' && obsidianSlug(text) === wantedSlug) slugMatch = node;
-					}
-					if (slugMatch !== null) {
-						scrollHeadingIntoView(slugMatch);
+						keepFeedback('找不到块：' + wanted, 3200);
 						return;
+					}
+					const nodes = host.querySelectorAll('[data-outline]');
+					const texts = [];
+					for (let index = 0; index < nodes.length; index += 1) {
+						const node = nodes[index];
+						texts.push(String(node.textContent === undefined || node.textContent === null ? '' : node.textContent));
+					}
+					const matched = matchHeading(texts, wanted);
+					if (matched === null) {
+						keepFeedback('找不到标题：' + wanted, 3200);
+						return;
+					}
+					for (let index = 0; index < nodes.length; index += 1) {
+						const text = String(nodes[index].textContent === undefined || nodes[index].textContent === null ? '' : nodes[index].textContent)
+							.replace(/\s+/g, ' ')
+							.trim();
+						if (text === String(matched).replace(/\s+/g, ' ').trim()) {
+							scrollHeadingIntoView(nodes[index]);
+							return;
+						}
 					}
 					keepFeedback('找不到标题：' + wanted, 3200);
 				}, [keepFeedback]);
@@ -2501,6 +2588,19 @@ window.__ModuleLoader__.load({
 					() => (note === null ? null : renderMarkdown(note.text, navigate, outlineAnchors, jumpToAnchor)),
 					[note, navigate, outlineAnchors, jumpToAnchor],
 				);
+
+				// `[[笔记#标题]]` opened THIS page: the opener left the anchor in
+				// `pendingAnchors` keyed by path. Consume it once the note is drawn — one
+				// tick later, because the headings appear in the same commit as `note` and
+				// the scroll needs them laid out.
+				React.useEffect(() => {
+					if (note === null || path === undefined) return undefined;
+					const pending = pendingAnchors.get(path);
+					if (pending === undefined) return undefined;
+					pendingAnchors.delete(path);
+					const timer = setTimeout(() => jumpToAnchor(pending), 0);
+					return () => clearTimeout(timer);
+				}, [note, path, jumpToAnchor]);
 
 				/** The headings currently on screen, in document order. */
 				const collectOutline = React.useCallback(() => {
@@ -3127,6 +3227,8 @@ window.__ModuleLoader__.load({
 			renderMarkdown,
 			obsidianSlug,
 			decodeFragment,
+			matchHeading,
+			splitBlockId,
 			// Read by the harness to prove an unknown root is a refusal (`no-path`),
 			// not an `@undefined` mention.
 			mentionInto,

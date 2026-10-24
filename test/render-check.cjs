@@ -595,11 +595,15 @@ if (mdButtons.length !== 1) throw new Error('a fragment link is not one button: 
 mdButtons[0].props.onClick({ preventDefault() {}, stopPropagation() {} })
 if (mdAnchors.length !== 1 || mdAnchors[0] !== '目录') throw new Error('the #目录 link did not target its heading: ' + JSON.stringify(mdAnchors))
 
-// `[[笔记#标题]]` opens the NOTE: the heading is not part of its name.
+// `[[笔记#标题]]` opens the NOTE and carries the anchor: the heading is not part of its
+// name, but the opened page needs it to scroll after it has drawn the note.
 const crossClicks = []
-const cross = api.__internals.renderMarkdown('[[沙盘游戏治疗/团体箱庭疗法#团体沙盘游戏规则|团体]], [[普通笔记]]\n', (target) => crossClicks.push(target))
+const cross = api.__internals.renderMarkdown(
+  '[[沙盘游戏治疗/团体箱庭疗法#团体沙盘游戏规则|团体]], [[普通笔记]]\n',
+  (target, anchor) => crossClicks.push(target + ' § ' + (anchor === undefined ? '' : anchor)),
+)
 for (const button of buttonsIn(cross)) button.props.onClick({ preventDefault() {}, stopPropagation() {} })
-if (crossClicks.join('|') !== '沙盘游戏治疗/团体箱庭疗法|普通笔记') {
+if (crossClicks.join('|') !== '沙盘游戏治疗/团体箱庭疗法 § 团体沙盘游戏规则|普通笔记 § ') {
   throw new Error('cross-note links resolve wrongly: ' + JSON.stringify(crossClicks))
 }
 
@@ -611,6 +615,39 @@ if (!inert.includes('dashed')) throw new Error('an inert anchor lost its dashed 
 // Obsidian matches the heading TEXT; the slug form is the fallback for converted notes.
 if (api.__internals.obsidianSlug('一、概述与定义') !== '一概述与定义') throw new Error('the heading slug is not GitHub-flavoured')
 if (api.__internals.decodeFragment('%E7%9B%AE%E5%BD%95') !== '目录') throw new Error('a percent-encoded fragment is not decoded')
+
+// `^block-id` marks a block; the marker is notation, never content, and the block carries
+// the id so `[[笔记#^block-id]]` can land on it.
+function findByProp(blocks, prop) {
+  let found = null
+  walkElements(blocks, (element) => { if (found === null && element.props[prop] !== undefined) found = element })
+  return found
+}
+const markedParagraph = api.__internals.renderMarkdown('一段需要被引用的文字 ^abc-1\n')
+const markedNode = findByProp(markedParagraph, 'data-block-id')
+if (markedNode === null) throw new Error('a ^block-id paragraph did not expose its block id')
+if (markedNode.props['data-block-id'] !== 'abc-1') throw new Error('the block id is wrong: ' + markedNode.props['data-block-id'])
+const markedHtml = renderToStaticMarkup(React.createElement('div', null, markedParagraph))
+if (markedHtml.includes('^abc-1')) throw new Error('the ^block-id marker leaked into the page')
+if (!markedHtml.includes('一段需要被引用的文字')) throw new Error('a marked block lost its text')
+const markedItem = findByProp(api.__internals.renderMarkdown('- 列表项 ^list-1\n'), 'data-block-id')
+if (markedItem === null || markedItem.props['data-block-id'] !== 'list-1') throw new Error('a ^block-id list item did not expose its block id')
+
+// The matching chain: exact (Obsidian's rule) → slug → UNIQUE containment. An ambiguous
+// containment is refused rather than guessed.
+if (api.__internals.matchHeading(['5.1 整合性 (Integration)', '二、别的'], '5.1 整合性 (Integration)') !== '5.1 整合性 (Integration)') {
+  throw new Error('an exact heading no longer matches')
+}
+if (api.__internals.matchHeading(['5.1 整合性 (Integration)', '二、别的'], '整合性') !== '5.1 整合性 (Integration)') {
+  throw new Error('an abbreviated anchor no longer matches a unique heading')
+}
+if (api.__internals.matchHeading(['1. 整合性 A', '2. 整合性 B'], '整合性') !== null) {
+  throw new Error('an ambiguous anchor was guessed instead of refused')
+}
+if (api.__internals.matchHeading(['一、概述与定义'], '一概述与定义') !== '一、概述与定义') {
+  throw new Error('the slug fallback stopped matching')
+}
+if (api.__internals.matchHeading(['目录'], '') !== null) throw new Error('an empty anchor matched something')
 
 // The render cap must not cut a note the host is willing to send. The compiled guide
 // is 11,738 lines; at 3,000 the page ended at its 7th chapter, so 39 of the 45 table
