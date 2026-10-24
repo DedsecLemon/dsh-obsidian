@@ -253,6 +253,18 @@ page stop looking like Obsidian.
 A GFM table renders as a table. Before that it rendered as a paragraph of pipes,
 which is most of what a note with a table looked like.
 
+**Obsidian callouts, folded the way Obsidian folds them.** `> [!cite]- 来源（点开展开）`
+is a callout, not a quote: the `-` marker starts it folded, `+` starts it open but
+foldable, and a bare `> [!note]` is open and cannot be folded. The compiled
+*高性价比人生指南（合订本）* ends every one of its 767 items with a folded `[!cite]`
+source block, and rendering those as quotes put hundreds of DOIs in the middle of the
+prose. A callout keeps Obsidian's per-type rule colour and 10% tint; the folded body
+stays mounted and is hidden with CSS, so opening one needs no refetch and folding never
+changes what the outline sees. Raw HTML `<details>`/`<summary>` disclosures render as
+the same control — that note folds its 41-term glossary that way, table and all.
+`render-check` pins the three fold states, the title, the markdown inside the body, and
+that a block which is not a callout keeps the quote typography above.
+
 **The outline.** `大纲` in the note's header opens a floating list of its headings
 down the right edge of the pane: clicking one scrolls the reading area to it, and
 the row for the heading you are currently inside is the one marked. Depth is

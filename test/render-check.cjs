@@ -490,6 +490,57 @@ const quoteHtml = renderToStaticMarkup(React.createElement('div', null, api.__in
 if (!quoteHtml.includes('border-left:2px')) throw new Error('the quote rule is not Obsidian\'s 2px')
 if (!quoteHtml.includes('padding:0 0 0 24px')) throw new Error('the quote is not indented 24px')
 
+// ── Obsidian callouts and raw <details> ─────────────────────────────────────
+// `高性价比人生指南（合订本）` ends every one of its 767 items with
+// `> [!cite]- 来源（点开展开）`. Before this the marker leaked and every DOI spilled
+// into the prose as one long quote; the fold is what makes that note readable.
+const citeHtml = renderToStaticMarkup(React.createElement('div', null, api.__internals.renderMarkdown(
+  '> [!cite]- 来源（点开展开）\n> 1. Neal B 等 (2021). NEJM. https://doi.org/10.1056/NEJMoa2105675\n')))
+if (!citeHtml.includes('aria-expanded="false"')) throw new Error('a `-` callout is not folded')
+if (citeHtml.includes('[!cite]')) throw new Error('the callout marker leaked into the output')
+if (!citeHtml.includes('display:none')) throw new Error('a folded callout still shows its body')
+if (!citeHtml.includes('来源（点开展开）')) throw new Error('the callout title was lost')
+if (!citeHtml.includes('https://doi.org/')) throw new Error('the folded body was dropped from the DOM')
+if (!citeHtml.includes('border-left:2px solid #5f6b7a')) throw new Error('the cite callout lost its own rule')
+// The folded body is real markdown: the numbered source is a list, not run-on text.
+if (!citeHtml.includes('<ol')) throw new Error('the folded body was not rendered as markdown')
+
+// `+` is Obsidian's "open but foldable" state.
+const openCallout = renderToStaticMarkup(React.createElement('div', null,
+  api.__internals.renderMarkdown('> [!cite]+ 来源\n> 正文\n')))
+if (!openCallout.includes('aria-expanded="true"')) throw new Error('a `+` callout is not expanded')
+
+// A callout with no fold marker is expanded and NOT foldable, exactly like Obsidian.
+const plainCallout = renderToStaticMarkup(React.createElement('div', null,
+  api.__internals.renderMarkdown('> [!tip] 2026-07-18 新增\n> 内容\n')))
+if (plainCallout.includes('aria-expanded')) throw new Error('a bare callout became foldable')
+if (plainCallout.includes('display:none')) throw new Error('a bare callout hid its body')
+if (!plainCallout.includes('2026-07-18 新增')) throw new Error('the tip callout title was lost')
+
+// A `>` block that is not a callout must keep the quote typography asserted above.
+const stillQuote = renderToStaticMarkup(React.createElement('div', null,
+  api.__internals.renderMarkdown('> [!not a callout\n')))
+if (!stillQuote.includes('border-left:2px')) throw new Error('a non-callout quote lost its rule')
+
+// The same note folds its 41-term glossary in raw HTML <details>.
+const detailsHtml = renderToStaticMarkup(React.createElement('div', null, api.__internals.renderMarkdown([
+  '<details>',
+  '<summary>展开 41 条术语</summary>',
+  '',
+  '| 术语 | 意思 |',
+  '| --- | --- |',
+  '| HR | 风险比 |',
+  '',
+  '</details>',
+  '',
+  '结尾段落。',
+].join('\n'))))
+if (detailsHtml.includes('&lt;details&gt;')) throw new Error('raw <details> leaked as text')
+if (!detailsHtml.includes('aria-expanded="false"')) throw new Error('a <details> block is not folded')
+if (!detailsHtml.includes('展开 41 条术语')) throw new Error('the <summary> text was lost')
+if (!detailsHtml.includes('<table')) throw new Error('the table inside <details> was not rendered')
+if (!detailsHtml.includes('结尾段落')) throw new Error('content after </details> was swallowed')
+
 // ── report ─────────────────────────────────────────────────────────────────
 console.log('client.js harness OK')
 console.log('  tab type   :', tabType.kind, '-> id', tabType.id, 'title', JSON.stringify(tabType.title('')))

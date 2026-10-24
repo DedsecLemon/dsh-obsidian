@@ -859,14 +859,125 @@ window.__ModuleLoader__.load({
 		const RE_OL_ITEM = /^\s*\d+[.)]\s+/;
 		const RE_RULE = /^\s*(-{3,}|\*{3,}|_{3,})\s*$/;
 
+		/**
+		 * Obsidian callout head, applied to the ALREADY de-quoted first line
+		 * (`> [!cite]- 来源（点开展开）` arrives here as `[!cite]- 来源（点开展开）`):
+		 * the type, the fold marker, and the title.
+		 */
+		const RE_CALLOUT_HEAD = /^\[!([^\];\s]+)\]([+-]?)\s*(.*)$/;
+
+		/** Raw HTML disclosure: `<details>` … `<summary>` … `</details>`. */
+		const RE_DETAILS_OPEN = /^\s*<details\b([^>]*)>/i;
+		const RE_DETAILS_ANY = /<details\b/i;
+		const RE_DETAILS_CLOSE = /<\/details>/i;
+		const RE_SUMMARY_OPEN = /^\s*<summary\b[^>]*>(.*)$/i;
+		const RE_SUMMARY_CLOSE = /^(.*?)<\/summary>\s*$/i;
+
+		/**
+		 * Obsidian's callout palette: the rule/title colour plus a 10%-alpha tint of it.
+		 *
+		 * `cite` is not a built-in type — the knowledge base's compile script writes it
+		 * for a source block — so it gets a neutral slate of its own instead of the grey
+		 * fallback, which keeps it distinguishable from `quote`. `details` is the raw
+		 * `<details>` disclosure, which Obsidian draws with no tint at all.
+		 */
+		const CALLOUT_STYLES = {
+			note: { rule: '#086ddd', tint: 'rgba(8, 109, 221, 0.10)' },
+			info: { rule: '#086ddd', tint: 'rgba(8, 109, 221, 0.10)' },
+			todo: { rule: '#086ddd', tint: 'rgba(8, 109, 221, 0.10)' },
+			abstract: { rule: '#00bfbc', tint: 'rgba(0, 191, 188, 0.10)' },
+			summary: { rule: '#00bfbc', tint: 'rgba(0, 191, 188, 0.10)' },
+			tip: { rule: '#00bfbc', tint: 'rgba(0, 191, 188, 0.10)' },
+			hint: { rule: '#00bfbc', tint: 'rgba(0, 191, 188, 0.10)' },
+			success: { rule: '#08b94e', tint: 'rgba(8, 185, 78, 0.10)' },
+			question: { rule: '#e0ac00', tint: 'rgba(224, 172, 0, 0.10)' },
+			warning: { rule: '#ec7500', tint: 'rgba(236, 117, 0, 0.10)' },
+			failure: { rule: '#e93147', tint: 'rgba(233, 49, 71, 0.10)' },
+			danger: { rule: '#e93147', tint: 'rgba(233, 49, 71, 0.10)' },
+			error: { rule: '#e93147', tint: 'rgba(233, 49, 71, 0.10)' },
+			bug: { rule: '#e93147', tint: 'rgba(233, 49, 71, 0.10)' },
+			example: { rule: '#7852ee', tint: 'rgba(120, 82, 238, 0.10)' },
+			quote: { rule: '#9e9e9e', tint: 'rgba(158, 158, 158, 0.10)' },
+			cite: { rule: '#5f6b7a', tint: 'rgba(95, 107, 122, 0.10)' },
+			details: { rule: '#8a8f98', tint: 'transparent', titleColor: 'inherit' },
+		};
+		/** An unknown callout type falls back the way Obsidian's own theme does. */
+		const CALLOUT_FALLBACK = CALLOUT_STYLES.note;
+
+		/**
+		 * Obsidian's English default titles, used when a callout carries none.
+		 * `details` has no default: a `<details>` with no `<summary>` shows only the
+		 * disclosure triangle, so the header falls back to the caret alone.
+		 */
+		const CALLOUT_TITLES = {
+			note: 'Note', info: 'Info', todo: 'Todo', abstract: 'Abstract', summary: 'Summary',
+			tip: 'Tip', hint: 'Hint', success: 'Success', question: 'Question', warning: 'Warning',
+			failure: 'Failure', danger: 'Danger', error: 'Error', bug: 'Bug', example: 'Example',
+			quote: 'Quote', cite: '来源', details: '',
+		};
+
 		function isBlockStart(line) {
 			return /^\s*$/.test(line)
 				|| /^\s*```/.test(line)
 				|| /^#{1,6}\s/.test(line)
 				|| /^\s*>/.test(line)
+				|| RE_DETAILS_OPEN.test(line)
 				|| RE_UL_ITEM.test(line)
 				|| RE_OL_ITEM.test(line)
 				|| RE_RULE.test(line);
+		}
+
+		/**
+		 * Read one de-quoted block as an Obsidian callout.
+		 * @returns the callout shape, or null when the block is an ordinary quote.
+		 */
+		function parseCallout(quoted) {
+			if (quoted.length === 0) return null;
+			const match = RE_CALLOUT_HEAD.exec(quoted[0]);
+			if (match === null) return null;
+			const type = match[1].toLowerCase();
+			const fold = match[2];
+			const explicit = match[3].trim();
+			return {
+				type,
+				// A bare `[!type]` renders open and cannot be folded; `+` is open and
+				// foldable; `-` starts folded — exactly Obsidian's three states.
+				foldable: fold === '-' || fold === '+',
+				defaultOpen: fold !== '-',
+				title: explicit !== '' ? explicit : (CALLOUT_TITLES[type] ?? type),
+				body: quoted.slice(1),
+			};
+		}
+
+		/**
+		 * Pull the `<summary>` out of a raw `<details>` body; the rest is content.
+		 * @param bodyLines - lines between `<details>` and `</details>` (mutated).
+		 * @returns the summary text, empty when the block has no `<summary>`.
+		 */
+		function takeSummary(bodyLines) {
+			for (let index = 0; index < Math.min(bodyLines.length, 4); index += 1) {
+				const match = RE_SUMMARY_OPEN.exec(bodyLines[index]);
+				if (match === null) continue;
+				const single = RE_SUMMARY_CLOSE.exec(match[1]);
+				if (single !== null) {
+					bodyLines.splice(0, index + 1);
+					return single[1].trim();
+				}
+				// A summary that wraps: keep the lines until `</summary>`.
+				const parts = [match[1]];
+				for (let cursor = index + 1; cursor < bodyLines.length; cursor += 1) {
+					const end = RE_SUMMARY_CLOSE.exec(bodyLines[cursor]);
+					if (end === null) {
+						parts.push(bodyLines[cursor]);
+						continue;
+					}
+					parts.push(end[1]);
+					bodyLines.splice(0, cursor + 1);
+					return parts.join(' ').trim();
+				}
+				return match[1].trim();
+			}
+			return '';
 		}
 
 		// ── reading typography ───────────────────────────────────────────────
@@ -987,6 +1098,47 @@ window.__ModuleLoader__.load({
 					continue;
 				}
 
+				// A raw HTML disclosure, exactly as Obsidian's reading view treats it
+				// (the compiled guide folds its 41-term glossary this way). It has to run
+				// before the table scan, because the content inside is often a table.
+				const detailsHead = RE_DETAILS_OPEN.exec(line);
+				if (detailsHead) {
+					const inner = [];
+					let depth = 1;
+					i += 1;
+					while (i < lines.length) {
+						const current = lines[i];
+						const opens = RE_DETAILS_ANY.test(current) ? 1 : 0;
+						const closes = RE_DETAILS_CLOSE.test(current) ? 1 : 0;
+						if (opens > 0 && closes > 0) {
+							// Opening and closing on one line nets out; keep the line as content.
+							inner.push(current);
+							i += 1;
+							continue;
+						}
+						if (opens > 0) depth += 1;
+						if (closes > 0) {
+							depth -= 1;
+							if (depth === 0) { i += 1; break; }
+						}
+						inner.push(current);
+						i += 1;
+					}
+					const summary = takeSummary(inner);
+					const bodyText = inner.join('\n');
+					blocks.push(h(Callout, {
+						key: 'b' + (key += 1),
+						type: 'details',
+						foldable: true,
+						// `<details open>` starts expanded; everything else starts folded.
+						defaultOpen: /\bopen\b/i.test(detailsHead[1]),
+						title: summary,
+						titleNodes: summary === '' ? null : renderInline(summary, 'dt' + key, onLink),
+						body: bodyText.trim() === '' ? null : renderMarkdown(bodyText, onLink, anchors + 'dt' + key + '-'),
+					}));
+					continue;
+				}
+
 				// GFM table. Without this a table renders as a wall of pipes, which is
 				// most of what "排版乱" looks like on a note that has one.
 				if (tableStartsAt(i)) {
@@ -1066,6 +1218,24 @@ window.__ModuleLoader__.load({
 						quoted.push(lines[i].replace(/^\s*>\s?/, ''));
 						i += 1;
 					}
+					// `> [!cite]- 来源（点开展开）` is an Obsidian callout, not a quote: the
+					// compiled guide ends every one of its 767 items with one, and rendering
+					// it as prose put hundreds of DOIs in the middle of the page.
+					const callout = parseCallout(quoted);
+					if (callout !== null) {
+						const bodyText = callout.body.join('\n');
+						blocks.push(h(Callout, {
+							key: 'b' + (key += 1),
+							type: callout.type,
+							foldable: callout.foldable,
+							defaultOpen: callout.defaultOpen,
+							title: callout.title,
+							titleNodes: renderInline(callout.title, 'ct' + key, onLink),
+							// Its own anchor prefix keeps ids unique against the outer note.
+							body: bodyText.trim() === '' ? null : renderMarkdown(bodyText, onLink, anchors + 'c' + key + '-'),
+						}));
+						continue;
+					}
 					blocks.push(h('blockquote', {
 						key: 'b' + (key += 1),
 						style: {
@@ -1109,6 +1279,96 @@ window.__ModuleLoader__.load({
 			}
 
 			return blocks;
+		}
+
+		/**
+		 * One Obsidian callout, or one raw `<details>` disclosure, with the fold the
+		 * source asked for.
+		 *
+		 * `[!cite]-` starts folded, `[!cite]+` starts open, and a bare `[!cite]` is not
+		 * foldable at all — Obsidian's three states. Hidden bodies stay mounted and are
+		 * hidden with CSS, so the outline (which reads rendered `[data-outline]` nodes)
+		 * does not change shape just because a block was folded.
+		 *
+		 * @param props - `type`, `title`, `titleNodes`, `body`, `foldable`, `defaultOpen`.
+		 */
+		function Callout(props) {
+			const [open, setOpen] = React.useState(props.defaultOpen === true);
+			const [hovered, hover] = useHover();
+			const palette = CALLOUT_STYLES[props.type] ?? CALLOUT_FALLBACK;
+			const interactive = props.foldable === true;
+			const titleColor = palette.titleColor ?? palette.rule;
+			const headerStyle = {
+				display: 'flex',
+				alignItems: 'baseline',
+				width: '100%',
+				margin: 0,
+				padding: 0,
+				border: 'none',
+				borderRadius: 4,
+				background: interactive && hovered ? 'rgba(127, 127, 127, 0.12)' : 'transparent',
+				color: 'inherit',
+				font: 'inherit',
+				fontSize: '0.95em',
+				fontWeight: 600,
+				lineHeight: 1.5,
+				textAlign: 'left',
+				cursor: interactive ? 'pointer' : 'default',
+			};
+			const titleText = props.titleNodes === undefined || props.titleNodes === null
+				? (props.title === '' ? null : props.title)
+				: props.titleNodes;
+			const head = [
+				h('span', {
+					key: 'caret',
+					'aria-hidden': 'true',
+					style: {
+						display: 'inline-block',
+						flex: 'none',
+						width: 12,
+						fontSize: 10,
+						lineHeight: '1.5',
+						color: palette.rule,
+						textAlign: 'center',
+						transform: open ? 'rotate(90deg)' : 'none',
+						transition: 'transform 120ms ease',
+						// Reserve the cell so every title starts at the same x.
+						visibility: interactive ? 'visible' : 'hidden',
+					},
+				}, '▶'),
+				titleText === null ? null : h('span', {
+					key: 'title',
+					style: { marginLeft: 4, minWidth: 0, color: titleColor, overflowWrap: 'anywhere' },
+				}, titleText),
+			];
+			return h('div', {
+				style: {
+					margin: READ.block + ' 0',
+					padding: '4px 10px',
+					borderLeft: '2px solid ' + palette.rule,
+					borderRadius: 4,
+					background: palette.tint,
+				},
+			}, [
+				interactive
+					? h('button', {
+						key: 'head',
+						type: 'button',
+						'aria-expanded': open ? 'true' : 'false',
+						onClick: () => setOpen((value) => !value),
+						style: headerStyle,
+						...hover,
+					}, head)
+					: h('div', { key: 'head', style: headerStyle }, head),
+				h('div', {
+					key: 'body',
+					style: {
+						display: open ? 'block' : 'none',
+						// The first child's own top margin would double the header gap.
+						paddingTop: 2,
+					},
+				}, props.body),
+			]);
 		}
 
 		// ── shared bits ──────────────────────────────────────────────────────

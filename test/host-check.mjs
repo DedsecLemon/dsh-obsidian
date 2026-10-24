@@ -181,12 +181,17 @@ expect('tree?path lists a subdirectory', sub.status === 200 && Array.isArray(sub
 const treeTraversal = await call('GET', '/dsh-obsidian/tree?path=' + encodeURIComponent('../../../Windows'))
 expect('tree traversal is refused', treeTraversal.status === 400, JSON.stringify(treeTraversal.body))
 
-const treeOnFile = await call('GET', '/dsh-obsidian/tree?path=' + encodeURIComponent('README.md'))
+// The vault is the reader's own directory, so do not assume a particular note name
+// lives at its root: pick whichever markdown file the tree just reported.
+const rootNote = entries.find((entry) => entry.type === 'file' && /\.md$/i.test(entry.name)) ?? { name: 'README.md', path: 'README.md' }
+expect('the vault root has a note to read', entries.some((entry) => entry.type === 'file' && /\.md$/i.test(entry.name)), rootNote.path)
+
+const treeOnFile = await call('GET', '/dsh-obsidian/tree?path=' + encodeURIComponent(rootNote.path))
 expect('tree rejects a file path', treeOnFile.status === 400, JSON.stringify(treeOnFile.body))
 
 // ── note ───────────────────────────────────────────────────────────────────
-const note = await call('GET', '/dsh-obsidian/note?path=' + encodeURIComponent('README.md'))
-expect('note reads a real file', note.status === 200 && typeof note.body.text === 'string' && note.body.text.length > 0, note.body.text ? note.body.text.length + ' chars' : note.body.error)
+const note = await call('GET', '/dsh-obsidian/note?path=' + encodeURIComponent(rootNote.path))
+expect('note reads a real file', note.status === 200 && typeof note.body.text === 'string' && note.body.text.length > 0, note.body.text ? rootNote.path + ' -> ' + note.body.text.length + ' chars' : note.body.error)
 
 const missing = await call('GET', '/dsh-obsidian/note?path=' + encodeURIComponent('no/such/note.md'))
 expect('missing note is a 404', missing.status === 404, JSON.stringify(missing.body))
