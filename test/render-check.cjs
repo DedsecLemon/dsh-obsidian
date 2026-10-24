@@ -541,6 +541,93 @@ if (!detailsHtml.includes('展开 41 条术语')) throw new Error('the <summary>
 if (!detailsHtml.includes('<table')) throw new Error('the table inside <details> was not rendered')
 if (!detailsHtml.includes('结尾段落')) throw new Error('content after </details> was swallowed')
 
+// ── same-note heading links (`[[#标题]]`, `[x](#锚点)`) ─────────────────────
+// The compiled guide's entire table of contents is 45 cells of
+// `[[#第 N 节 …\|N. 短标题]]`: an ALIAS PIPE escaped for the table parser, and a
+// heading in the same note. Every one was a dead button before this.
+function walkElements(node, visit) {
+  if (node === null || node === undefined) return
+  if (Array.isArray(node)) {
+    for (const child of node) walkElements(child, visit)
+    return
+  }
+  if (typeof node !== 'object' || node.props === undefined) return
+  visit(node)
+  walkElements(node.props.children, visit)
+}
+
+function buttonsIn(blocks) {
+  const found = []
+  walkElements(blocks, (element) => {
+    if (element.type === 'button' && typeof element.props.onClick === 'function') found.push(element)
+  })
+  return found
+}
+
+const clicks = []
+const anchors = []
+const inline = api.__internals.renderMarkdown(
+  '| 节 |\n| --- |\n| [[#第 1 节 不要早死\\|1. 不要早死]] |\n',
+  (target) => clicks.push('link:' + target),
+  undefined,
+  (anchor) => anchors.push(anchor),
+)
+const inlineHtml = renderToStaticMarkup(React.createElement('div', null, inline))
+if (!inlineHtml.includes('1. 不要早死')) throw new Error('the aliased TOC cell lost its label')
+if (inlineHtml.includes('[!')) throw new Error('raw markdown leaked into the TOC cell')
+const tocButtons = buttonsIn(inline)
+if (tocButtons.length !== 1) throw new Error('a same-note heading link is not one button: ' + tocButtons.length)
+if (tocButtons[0].props.children !== '1. 不要早死') throw new Error('the TOC button shows the wrong label')
+tocButtons[0].props.onClick({ preventDefault() {}, stopPropagation() {} })
+if (anchors.length !== 1 || anchors[0] !== '第 1 节 不要早死') {
+  throw new Error('the escaped-pipe anchor was not unescaped: ' + JSON.stringify(anchors))
+}
+if (clicks.length !== 0) throw new Error('a same-note heading link went to the note resolver')
+
+// `[x](#锚点)` is the other same-note spelling (53 of them in this vault).
+const mdAnchors = []
+const mdInline = api.__internals.renderMarkdown('[目录](#目录) 与 [外链](https://example.com)\n', undefined, undefined, (anchor) => mdAnchors.push(anchor))
+const mdHtml = renderToStaticMarkup(React.createElement('div', null, mdInline))
+if (!mdHtml.includes('href="https://example.com"')) throw new Error('a real external link stopped being a link')
+if (!mdHtml.includes('target="_blank"')) throw new Error('an external link lost target=_blank')
+const mdButtons = buttonsIn(mdInline)
+if (mdButtons.length !== 1) throw new Error('a fragment link is not one button: ' + mdButtons.length)
+mdButtons[0].props.onClick({ preventDefault() {}, stopPropagation() {} })
+if (mdAnchors.length !== 1 || mdAnchors[0] !== '目录') throw new Error('the #目录 link did not target its heading: ' + JSON.stringify(mdAnchors))
+
+// `[[笔记#标题]]` opens the NOTE: the heading is not part of its name.
+const crossClicks = []
+const cross = api.__internals.renderMarkdown('[[沙盘游戏治疗/团体箱庭疗法#团体沙盘游戏规则|团体]], [[普通笔记]]\n', (target) => crossClicks.push(target))
+for (const button of buttonsIn(cross)) button.props.onClick({ preventDefault() {}, stopPropagation() {} })
+if (crossClicks.join('|') !== '沙盘游戏治疗/团体箱庭疗法|普通笔记') {
+  throw new Error('cross-note links resolve wrongly: ' + JSON.stringify(crossClicks))
+}
+
+// Without an anchor navigator there is no dead button: the span says the link is inert.
+const inert = renderToStaticMarkup(React.createElement('div', null, api.__internals.renderMarkdown('[[#目录|目录]]\n')))
+if (inert.includes('<button')) throw new Error('an anchor became a button with no navigator')
+if (!inert.includes('dashed')) throw new Error('an inert anchor lost its dashed underline')
+
+// Obsidian matches the heading TEXT; the slug form is the fallback for converted notes.
+if (api.__internals.obsidianSlug('一、概述与定义') !== '一概述与定义') throw new Error('the heading slug is not GitHub-flavoured')
+if (api.__internals.decodeFragment('%E7%9B%AE%E5%BD%95') !== '目录') throw new Error('a percent-encoded fragment is not decoded')
+
+// The render cap must not cut a note the host is willing to send. The compiled guide
+// is 11,738 lines; at 3,000 the page ended at its 7th chapter, so 39 of the 45 table
+// of contents links pointed at headings that were never drawn.
+const longNote = []
+for (let index = 0; index < 4000; index += 1) {
+  longNote.push('第 ' + index + ' 行正文。')
+  if (index % 500 === 0) longNote.push('## 小节 ' + index)
+}
+longNote.push('## 末尾标题 3999')
+let sawLastHeading = false
+walkElements(api.__internals.renderMarkdown(longNote.join('\n')), (element) => {
+  if (element.props['data-outline'] === undefined) return
+  if (JSON.stringify(element.props.children).includes('末尾标题 3999')) sawLastHeading = true
+})
+if (!sawLastHeading) throw new Error('the render cap cut a 4,000-line note before its last heading')
+
 // ── report ─────────────────────────────────────────────────────────────────
 console.log('client.js harness OK')
 console.log('  tab type   :', tabType.kind, '-> id', tabType.id, 'title', JSON.stringify(tabType.title('')))

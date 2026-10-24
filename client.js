@@ -578,7 +578,17 @@ window.__ModuleLoader__.load({
 			return rel === '' ? base : base + '/' + rel;
 		}
 
-		const MAX_RENDER_LINES = 3000;
+		/**
+		 * Hard bound on how many lines are turned into DOM.
+		 *
+		 * The HOST is what bounds a read (`MAX_NOTE_BYTES`, 4 MB) and reports it through
+		 * `truncated`; this only exists so a newline-per-character file cannot build a
+		 * block per line. It is deliberately far above what the byte cap admits: at 3,000
+		 * it silently cut the compiled guide at its 7th chapter, so its own table of
+		 * contents pointed at headings the page had never drawn. The whole 11,738-line
+		 * guide renders in ~130 ms / 2.3 MB of HTML, so the honest bound is the byte cap.
+		 */
+		const MAX_RENDER_LINES = 40000;
 		const SEARCH_DEBOUNCE_MS = 250;
 		/** The DOM id every rendered heading carries, and the outline scrolls to. */
 		const OUTLINE_ID_PREFIX = 'dsh-obsidian-outline-';
@@ -770,9 +780,62 @@ window.__ModuleLoader__.load({
 
 		const INLINE = /(\[\[[^\]\n|]{1,200}(?:\|[^\]\n]{1,200})?\]\])|(`[^`\n]+`)|(\*\*[^*\n]+\*\*)|(~~[^~\n]+~~)|(\*[^*\n]+\*)|(\[[^\]\n]*\]\([^)\s]+\))/g;
 
-		/** Inline spans: wikilinks, code, bold, strike, italic, links. */
-		function renderInline(text, prefix, onLink) {
+		/**
+		 * GitHub-flavoured heading slug — how some converted notes spell `[x](#锚点)`.
+		 *
+		 * Obsidian links to a heading by its TEXT; a handful of notes in this vault were
+		 * converted with slug anchors (`#一概述与定义` for `## 一、概述与定义`), so a jump
+		 * tries the exact text first and this form as the fallback.
+		 */
+		function obsidianSlug(text) {
+			return String(text)
+				.toLowerCase()
+				.replace(/[^\p{L}\p{N}\s-]/gu, '')
+				.replace(/\s+/g, '-')
+				.replace(/^-+|-+$/g, '');
+		}
+
+		/** A `[x](#fragment)` fragment, URL-decoded (Obsidian writes raw text, tools slugs). */
+		function decodeFragment(fragment) {
+			try {
+				return decodeURIComponent(fragment).replace(/\s+/g, ' ').trim();
+			} catch (error) {
+				return String(fragment).replace(/\s+/g, ' ').trim();
+			}
+		}
+
+		/**
+		 * Scroll one rendered heading to the top of the reading area.
+		 * The rendered headings already carry Obsidian's `scroll-margin-top`, so this is
+		 * the whole jump. Guarded because the mount harness runs on jsdom, which has no
+		 * `scrollIntoView`.
+		 */
+		function scrollHeadingIntoView(node) {
+			if (node === null || node === undefined) return;
+			if (typeof node.scrollIntoView !== 'function') return;
+			node.scrollIntoView({ block: 'start', behavior: 'smooth' });
+		}
+
+		/**
+		 * Render one line of inline Markdown.
+		 *
+		 * @param text - the line.
+		 * @param prefix - key prefix, so two lines cannot collide.
+		 * @param onLink - navigator for `[[wikilinks]]` (opens another note).
+		 * @param onAnchor - navigator for a heading in THIS note: `[[#标题]]`, `[x](#锚点)`.
+		 *   Without it, an anchor renders as a dashed span rather than a dead button.
+		 */
+		function renderInline(text, prefix, onLink, onAnchor) {
 			const nodes = [];
+			const linkButtonStyle = {
+				color: T.brand,
+				background: 'transparent',
+				border: 'none',
+				padding: 0,
+				cursor: 'pointer',
+				textDecoration: 'underline',
+				font: 'inherit',
+			};
 			INLINE.lastIndex = 0;
 			let last = 0;
 			let index = 0;
@@ -784,29 +847,44 @@ window.__ModuleLoader__.load({
 				if (token.slice(0, 2) === '[[') {
 					const inner = token.slice(2, -2);
 					const bar = inner.indexOf('|');
-					const target = bar >= 0 ? inner.slice(0, bar) : inner;
+					// A `|` inside a table cell is written `\|` so the table parser keeps the
+					// row intact. Obsidian still reads it as the alias separator, and the
+					// escape must not survive into the target (`[[#标题\|别名]]`).
+					const target = (bar >= 0 ? inner.slice(0, bar) : inner).replace(/\\$/, '').trim();
 					const label = bar >= 0 ? inner.slice(bar + 1) : inner;
-					if (typeof onLink === 'function') {
+					const anchor = target.charAt(0) === '#' ? target.slice(1).trim() : null;
+					const hashAt = target.indexOf('#');
+					// `[[#标题]]` keeps you on this page — the compiled guide's entire table
+					// of contents is 45 of these, and routing them through the note resolver
+					// was why clicking a chapter did nothing.
+					const sameNote = anchor !== null && typeof onAnchor === 'function';
+					// `[[笔记#标题]]` opens the note: the heading is not part of its name.
+					const noteTarget = anchor !== null ? '' : (hashAt > 0 ? target.slice(0, hashAt).trim() : target);
+					if (sameNote) {
+						nodes.push(h('button', {
+							key,
+							type: 'button',
+							title: '跳到 ' + anchor,
+							onClick: (event) => {
+								event.preventDefault();
+								event.stopPropagation();
+								onAnchor(anchor);
+							},
+							style: linkButtonStyle,
+						}, label.trim()));
+					} else if (anchor === null && typeof onLink === 'function' && noteTarget !== '') {
 						// A link to another note, if a navigator is supplied: this is what
 						// makes the note page's `[[wikilink]]`s clickable.
 						nodes.push(h('button', {
 							key,
 							type: 'button',
-							title: '打开 ' + target.trim(),
+							title: '打开 ' + noteTarget,
 							onClick: (event) => {
 								event.preventDefault();
 								event.stopPropagation();
-								onLink(target.trim());
+								onLink(noteTarget);
 							},
-							style: {
-								color: T.brand,
-								background: 'transparent',
-								border: 'none',
-								padding: 0,
-								cursor: 'pointer',
-								textDecoration: 'underline',
-								font: 'inherit',
-							},
+							style: linkButtonStyle,
 						}, label.trim()));
 					} else {
 						nodes.push(h('span', {
@@ -839,14 +917,33 @@ window.__ModuleLoader__.load({
 					nodes.push(h('em', { key }, token.slice(1, -1)));
 				} else {
 					const link = /^\[([^\]]*)\]\(([^)\s]+)\)$/.exec(token);
-					nodes.push(h('a', {
-						key,
-						href: link ? link[2] : '#',
-						target: '_blank',
-						rel: 'noopener noreferrer',
-						// Obsidian underlines links by default.
-						style: { color: T.brand, textDecoration: 'underline' },
-					}, link ? link[1] : token));
+					const href = link === null ? null : link[2];
+					const label = link === null ? token : link[1];
+					// `[文字](#标题)`: same note, so scroll instead of opening a new tab —
+					// `target="_blank"` on a fragment both leaves the page and goes nowhere.
+					if (href !== null && href.charAt(0) === '#' && typeof onAnchor === 'function') {
+						const fragment = decodeFragment(href.slice(1));
+						nodes.push(h('button', {
+							key,
+							type: 'button',
+							title: '跳到 ' + fragment,
+							onClick: (event) => {
+								event.preventDefault();
+								event.stopPropagation();
+								onAnchor(fragment);
+							},
+							style: linkButtonStyle,
+						}, label));
+					} else {
+						nodes.push(h('a', {
+							key,
+							href: href === null ? '#' : href,
+							target: '_blank',
+							rel: 'noopener noreferrer',
+							// Obsidian underlines links by default.
+							style: { color: T.brand, textDecoration: 'underline' },
+						}, label));
+					}
 				}
 				last = INLINE.lastIndex;
 			}
@@ -1044,11 +1141,12 @@ window.__ModuleLoader__.load({
 		 * Block-level markdown, capped by the caller's line budget.
 		 * @param text - the note's source.
 		 * @param onLink - navigator for `[[wikilinks]]`.
+		 * @param onAnchor - navigator for a heading in THIS note (`[[#标题]]`, `[x](#锚点)`).
 		 * @param idPrefix - anchor prefix for headings. Every heading carries its anchor
 		 *   and its depth as DOM attributes, so the outline panel reads what was
 		 *   actually rendered instead of parsing the note a second time.
 		 */
-		function renderMarkdown(text, onLink, idPrefix) {
+		function renderMarkdown(text, onLink, idPrefix, onAnchor) {
 			let lines = String(text).split(/\r?\n/);
 			// Drop YAML frontmatter: it is metadata, not prose.
 			if (lines[0] === '---') {
@@ -1133,8 +1231,8 @@ window.__ModuleLoader__.load({
 						// `<details open>` starts expanded; everything else starts folded.
 						defaultOpen: /\bopen\b/i.test(detailsHead[1]),
 						title: summary,
-						titleNodes: summary === '' ? null : renderInline(summary, 'dt' + key, onLink),
-						body: bodyText.trim() === '' ? null : renderMarkdown(bodyText, onLink, anchors + 'dt' + key + '-'),
+						titleNodes: summary === '' ? null : renderInline(summary, 'dt' + key, onLink, onAnchor),
+						body: bodyText.trim() === '' ? null : renderMarkdown(bodyText, onLink, anchors + 'dt' + key + '-', onAnchor),
 					}));
 					continue;
 				}
@@ -1164,12 +1262,12 @@ window.__ModuleLoader__.load({
 						h('thead', { key: 'h' }, h('tr', null, header.map((cell, cellIndex) => h('th', {
 							key: cellIndex,
 							style: { ...cellStyle, textAlign: 'left', fontWeight: 600, background: T.bgLayer1 },
-						}, renderInline(cell, 'th' + key + '-' + cellIndex, onLink))))),
+						}, renderInline(cell, 'th' + key + '-' + cellIndex, onLink, onAnchor))))),
 						rows.length === 0 ? null : h('tbody', { key: 't' }, rows.map((row, rowIndex) => h('tr', { key: rowIndex },
 							row.map((cell, cellIndex) => h('td', {
 								key: cellIndex,
 								style: cellStyle,
-							}, renderInline(cell, 'td' + key + '-' + rowIndex + '-' + cellIndex, onLink)))))),
+							}, renderInline(cell, 'td' + key + '-' + rowIndex + '-' + cellIndex, onLink, onAnchor)))))),
 					])));
 					continue;
 				}
@@ -1194,7 +1292,7 @@ window.__ModuleLoader__.load({
 							// Leave breathing room above the heading when the outline jumps here.
 							scrollMarginTop: 14,
 						},
-					}, renderInline(heading[2], 'h' + key, onLink)));
+					}, renderInline(heading[2], 'h' + key, onLink, onAnchor)));
 					i += 1;
 					continue;
 				}
@@ -1230,9 +1328,9 @@ window.__ModuleLoader__.load({
 							foldable: callout.foldable,
 							defaultOpen: callout.defaultOpen,
 							title: callout.title,
-							titleNodes: renderInline(callout.title, 'ct' + key, onLink),
+							titleNodes: renderInline(callout.title, 'ct' + key, onLink, onAnchor),
 							// Its own anchor prefix keeps ids unique against the outer note.
-							body: bodyText.trim() === '' ? null : renderMarkdown(bodyText, onLink, anchors + 'c' + key + '-'),
+							body: bodyText.trim() === '' ? null : renderMarkdown(bodyText, onLink, anchors + 'c' + key + '-', onAnchor),
 						}));
 						continue;
 					}
@@ -1245,7 +1343,7 @@ window.__ModuleLoader__.load({
 							color: 'inherit',
 							fontStyle: 'normal',
 						},
-					}, renderInline(quoted.join(' '), 'q' + key, onLink)));
+					}, renderInline(quoted.join(' '), 'q' + key, onLink, onAnchor)));
 					continue;
 				}
 
@@ -1263,7 +1361,7 @@ window.__ModuleLoader__.load({
 					}, items.map((item, itemIndex) => h('li', {
 						key: itemIndex,
 						style: { padding: READ.listPad + ' 0', lineHeight: READ.lineHeight },
-					}, renderInline(item, 'li' + key + '-' + itemIndex, onLink)))));
+					}, renderInline(item, 'li' + key + '-' + itemIndex, onLink, onAnchor)))));
 					continue;
 				}
 
@@ -1275,7 +1373,7 @@ window.__ModuleLoader__.load({
 				blocks.push(h('p', {
 					key: 'b' + (key += 1),
 					style: { margin: READ.block + ' 0', lineHeight: READ.lineHeight },
-				}, renderInline(paragraph.join(' '), 'p' + key, onLink)));
+				}, renderInline(paragraph.join(' '), 'p' + key, onLink, onAnchor)));
 			}
 
 			return blocks;
@@ -2314,6 +2412,43 @@ window.__ModuleLoader__.load({
 				}, [keepFeedback]);
 
 				/**
+				 * Jump to a heading inside THIS note: `[[#标题]]` and `[x](#锚点)`.
+				 *
+				 * The compiled guide's whole table of contents is written `[[#标题\|别名]]`
+				 * in table cells, so before this every chapter link was a dead button.
+				 * Headings already carry their text and their anchor id, so the jump reads
+				 * the rendered page rather than parsing the note a second time — the same
+				 * discipline the outline uses. Obsidian matches the heading text; a converted
+				 * note may spell the anchor as a slug, so that is the fallback. A heading
+				 * that really is absent says so instead of doing nothing.
+				 */
+				const jumpToAnchor = React.useCallback((anchor) => {
+					const host = bodyRef.current;
+					if (host === null) return;
+					const wanted = String(anchor === undefined || anchor === null ? '' : anchor).replace(/\s+/g, ' ').trim();
+					if (wanted === '') return;
+					const nodes = host.querySelectorAll('[data-outline]');
+					let slugMatch = null;
+					const wantedSlug = obsidianSlug(wanted);
+					for (let index = 0; index < nodes.length; index += 1) {
+						const node = nodes[index];
+						const text = String(node.textContent === undefined || node.textContent === null ? '' : node.textContent)
+							.replace(/\s+/g, ' ')
+							.trim();
+						if (text === wanted) {
+							scrollHeadingIntoView(node);
+							return;
+						}
+						if (slugMatch === null && wantedSlug !== '' && obsidianSlug(text) === wantedSlug) slugMatch = node;
+					}
+					if (slugMatch !== null) {
+						scrollHeadingIntoView(slugMatch);
+						return;
+					}
+					keepFeedback('找不到标题：' + wanted, 3200);
+				}, [keepFeedback]);
+
+				/**
 				 * Quote this note into the conversation on screen.
 				 *
 				 * The `inputActions` a tab body receives belong to the Session whose
@@ -2363,8 +2498,8 @@ window.__ModuleLoader__.load({
 				// Only the note (or the link navigator) can change what the Markdown
 				// becomes.
 				const renderedMarkdown = React.useMemo(
-					() => (note === null ? null : renderMarkdown(note.text, navigate, outlineAnchors)),
-					[note, navigate, outlineAnchors],
+					() => (note === null ? null : renderMarkdown(note.text, navigate, outlineAnchors, jumpToAnchor)),
+					[note, navigate, outlineAnchors, jumpToAnchor],
 				);
 
 				/** The headings currently on screen, in document order. */
@@ -2990,6 +3125,8 @@ window.__ModuleLoader__.load({
 		// READ by test/render-check.cjs or test/mount-check.cjs — nothing else.
 		exports.__internals = {
 			renderMarkdown,
+			obsidianSlug,
+			decodeFragment,
 			// Read by the harness to prove an unknown root is a refusal (`no-path`),
 			// not an `@undefined` mention.
 			mentionInto,

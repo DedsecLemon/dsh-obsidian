@@ -193,6 +193,22 @@ expect('tree rejects a file path', treeOnFile.status === 400, JSON.stringify(tre
 const note = await call('GET', '/dsh-obsidian/note?path=' + encodeURIComponent(rootNote.path))
 expect('note reads a real file', note.status === 200 && typeof note.body.text === 'string' && note.body.text.length > 0, note.body.text ? rootNote.path + ' -> ' + note.body.text.length + ' chars' : note.body.error)
 
+// The compiled guide is the reason MAX_NOTE_BYTES is 4 MB: at 512 KB the read stopped
+// around its 7th chapter, and 39 of its 45 table-of-contents links pointed at headings
+// the page never received. A regression here is silent — the note renders, just less of
+// it — so it is pinned whenever this vault happens to have the file.
+const GUIDE = '知识笔记/高性价比人生指南/高性价比人生指南（合订本）.md'
+const guide = await call('GET', '/dsh-obsidian/note?path=' + encodeURIComponent(GUIDE))
+if (guide.status === 404) {
+  skip('a note over the old 512 KB cap is read whole', 'this vault has no ' + GUIDE)
+} else {
+  expect(
+    'a note over the old 512 KB cap is read whole',
+    guide.status === 200 && guide.body.truncated === false && guide.body.text.length > 1000000,
+    JSON.stringify({ status: guide.status, truncated: guide.body.truncated, chars: guide.body.text === undefined ? undefined : guide.body.text.length }),
+  )
+}
+
 const missing = await call('GET', '/dsh-obsidian/note?path=' + encodeURIComponent('no/such/note.md'))
 expect('missing note is a 404', missing.status === 404, JSON.stringify(missing.body))
 

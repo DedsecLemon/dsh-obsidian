@@ -34,7 +34,11 @@ const SKIP_DIRS = new Set([
 const NOTE_FILE = /\.(md|markdown|canvas|txt)$/i
 
 const MAX_DIR_ENTRIES = 800
-const MAX_NOTE_BYTES = 512 * 1024
+// 4 MB. The compiled 高性价比人生指南 is 2.4 MB; at 512 KB the read stopped around its
+// 7th chapter, so most of its table of contents pointed at headings the page never
+// received. The whole guide parses and renders in ~130 ms and 2.3 MB of HTML, so this
+// is a bound on pathology, not a performance knob. `truncated` still reports a cut.
+const MAX_NOTE_BYTES = 4 * 1024 * 1024
 const MAX_SEARCH_FILES = 3000
 const MAX_SEARCH_BYTES = 1024 * 1024
 /**
