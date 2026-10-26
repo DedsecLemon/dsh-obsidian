@@ -44,6 +44,10 @@ window.__ModuleLoader__.load({
 			vault: '/dsh-obsidian/vault',
 			diag: '/dsh-obsidian/diag',
 			links: '/dsh-obsidian/links',
+			reveal: '/dsh-obsidian/reveal',
+			rename: '/dsh-obsidian/rename',
+			create: '/dsh-obsidian/note/create',
+			trash: '/dsh-obsidian/note/trash',
 		};
 
 		// ── the vault conversation ───────────────────────────────────────────
@@ -604,6 +608,17 @@ window.__ModuleLoader__.load({
 		 * once the note is drawn. Keyed by path so two pages cannot steal each other's jump.
 		 */
 		const pendingAnchors = new Map();
+
+		/**
+		 * Notes that should open in EDIT mode once their page has drawn them, keyed by path.
+		 *
+		 * The context menu's `编辑` runs from the tree, so it cannot set the page's local
+		 * `editing` state — same hand-off problem as `pendingAnchors`, same shape of answer.
+		 */
+		const pendingEdit = new Set();
+
+		/** Notes whose page should scroll to its edges once drawn (`查看关联`). */
+		const pendingRelated = new Set();
 
 		/** Theme tokens with fallbacks, so the panel also survives a bare shell. */
 		const T = {
@@ -1996,6 +2011,267 @@ window.__ModuleLoader__.load({
 			]);
 		}
 
+		/**
+		 * The tree's context menu.
+		 *
+		 * Right-click is undiscoverable, so the same menu also opens from the `⋯` button
+		 * that appears on hover — one implementation, two entry points. Keyboard handling is
+		 * not decoration either: a menu that only answers the mouse is a menu half the
+		 * readers cannot use, so it takes `role="menu"`, arrows, Enter and Escape.
+		 *
+		 * @param props - `state` (`{ x, y, node }` or null), `items`, `onClose`, `onRun(item)`.
+		 */
+		function VaultContextMenu(props) {
+			const state = props.state;
+			const items = props.items;
+			const ref = React.useRef(null);
+			const [active, setActive] = React.useState(0);
+			// Which indexes can actually be chosen. A separator has no handler, so an arrow
+			// key that lands on one makes the menu look broken: Enter would do nothing.
+			const selectable = [];
+			for (let index = 0; index < items.length; index += 1) {
+				if (items[index].separator !== true) selectable.push(index);
+			}
+			React.useEffect(() => { setActive(selectable.length === 0 ? 0 : selectable[0]); }, [state]);
+			const step = (delta) => {
+				if (selectable.length === 0) return;
+				const at = selectable.indexOf(active);
+				const next = at < 0
+					? (delta > 0 ? 0 : selectable.length - 1)
+					: (at + delta + selectable.length) % selectable.length;
+				setActive(selectable[next]);
+			};
+			React.useEffect(() => {
+				if (state === null) return undefined;
+				const onDown = (event) => {
+					if (ref.current !== null && ref.current.contains(event.target)) return;
+					// A press on the row whose menu is open IS the toggle (the row's own
+					// handler runs next); closing here too would turn "click again closes"
+					// into "click again reopens".
+					const row = typeof event.target.closest === 'function'
+						? event.target.closest('[data-dsh-obsidian-row]')
+						: null;
+					if (row !== null && state !== null
+						&& row.getAttribute('data-dsh-obsidian-row') === state.node.path) return;
+					props.onClose();
+				};
+				const onKey = (event) => {
+					if (event.key === 'Escape') {
+						event.preventDefault();
+						props.onClose();
+						return;
+					}
+					if (items.length === 0) return;
+					if (event.key === 'ArrowDown') {
+						event.preventDefault();
+						step(1);
+						return;
+					}
+					if (event.key === 'ArrowUp') {
+						event.preventDefault();
+						step(-1);
+						return;
+					}
+					if (event.key === 'Enter') {
+						event.preventDefault();
+						const item = items[active];
+						if (item !== undefined && item.separator !== true && item.disabled !== true && typeof item.run === 'function') {
+							props.onRun(item);
+						}
+					}
+				};
+				document.addEventListener('mousedown', onDown, true);
+				document.addEventListener('keydown', onKey, true);
+				return () => {
+					document.removeEventListener('mousedown', onDown, true);
+					document.removeEventListener('keydown', onKey, true);
+				};
+			}, [state, items, active, props.onClose, props.onRun]);
+			if (state === null) return null;
+			const width = 216;
+			const viewWidth = typeof window === 'undefined' ? 0 : window.innerWidth;
+			const viewHeight = typeof window === 'undefined' ? 0 : window.innerHeight;
+			const left = Math.max(8, Math.min(state.x, viewWidth === 0 ? state.x : viewWidth - width - 8));
+			const top = Math.max(8, Math.min(state.y, viewHeight === 0 ? state.y : viewHeight - items.length * 26 - 20));
+			return h('div', {
+				ref,
+				role: 'menu',
+				'data-dsh-obsidian-menu': state.node === undefined ? '' : state.node.type,
+				style: {
+					position: 'fixed',
+					left,
+					top,
+					width,
+					zIndex: 60,
+					padding: '4px 0',
+					border: '1px solid ' + T.borderL2,
+					borderRadius: 7,
+					background: T.bgOverlay,
+					boxShadow: T.shadow,
+					fontSize: 12.5,
+					lineHeight: 1.5,
+				},
+			}, items.map((item, index) => (item.separator === true
+				? h('div', {
+					key: 'sep' + index,
+					style: { height: 1, margin: '4px 0', background: T.borderL1 },
+				})
+				: h('button', {
+					key: item.id === undefined ? 'i' + index : item.id,
+					type: 'button',
+					role: 'menuitem',
+					disabled: item.disabled === true,
+					onMouseEnter: () => setActive(index),
+					onClick: () => { if (item.disabled !== true && typeof item.run === 'function') props.onRun(item); },
+					style: {
+						display: 'flex',
+						alignItems: 'baseline',
+						gap: 8,
+						width: '100%',
+						textAlign: 'left',
+						border: 'none',
+						background: index === active && item.disabled !== true ? T.hover : 'transparent',
+						color: item.danger === true ? T.error : (item.disabled === true ? T.labelSecondary : 'inherit'),
+						font: 'inherit',
+						fontSize: 12.5,
+						padding: '4px 10px',
+						cursor: item.disabled === true ? 'default' : 'pointer',
+						opacity: item.disabled === true ? 0.6 : 1,
+					},
+				}, [
+					h('span', { key: 'l', style: { flex: '1 1 auto', minWidth: 0 } }, item.label),
+					item.hint === undefined ? null : h('span', {
+						key: 'h',
+						style: { color: T.labelSecondary, fontSize: 11 },
+					}, item.hint),
+				]))));
+		}
+
+		/**
+		 * One small dialog for the three write actions.
+		 *
+		 * Rename and create take a single segment (the host refuses anything else, so the
+		 * button is disabled rather than the call failing later); trash is a confirm, and its
+		 * wording says where the file goes, because "删除" would be a lie — it is a move.
+		 *
+		 * @param props - `prompt` (`{ kind, node, initial }` or null), `onCancel`, `onSubmit(value)`.
+		 */
+		function VaultPrompt(props) {
+			const prompt = props.prompt;
+			// Seeded from the prompt itself, not only in an effect: the first paint must
+			// already show the current name, and a static render never runs effects.
+			const [value, setValue] = React.useState(
+				prompt === null || prompt.initial === undefined ? '' : String(prompt.initial),
+			);
+			React.useEffect(() => {
+				setValue(prompt === null || prompt.initial === undefined ? '' : String(prompt.initial));
+			}, [prompt]);
+			if (prompt === null) return null;
+			const confirming = prompt.kind === 'trash';
+			const trimmed = value.trim();
+			const invalid = !confirming && (trimmed === '' || trimmed.includes('/') || trimmed.includes('\\') || trimmed.startsWith('.'));
+			const labels = {
+				rename: ['重命名', '新名称'],
+				create: ['新建笔记', '笔记名'],
+				trash: ['移到 .trash', ''],
+			};
+			const [title, field] = labels[prompt.kind] === undefined ? ['操作', ''] : labels[prompt.kind];
+			const submit = () => {
+				if (invalid) return;
+				props.onSubmit(confirming ? undefined : trimmed);
+			};
+			return h('div', {
+				'data-dsh-obsidian-prompt': prompt.kind,
+				// Enter and Escape answer the DIALOG, not the input: after clicking the
+				// message or a button the input no longer has focus, and keys that only work
+				// while a field is focused read as a broken dialog.
+				onKeyDown: (event) => {
+					if (event.key === 'Enter') { event.preventDefault(); submit(); return; }
+					if (event.key === 'Escape') { event.preventDefault(); props.onCancel(); }
+				},
+				style: {
+					position: 'fixed',
+					inset: 0,
+					zIndex: 70,
+					display: 'flex',
+					alignItems: 'center',
+					justifyContent: 'center',
+					background: 'rgba(0,0,0,0.28)',
+				},
+			}, h('div', {
+				style: {
+					width: 300,
+					padding: '12px 14px',
+					borderRadius: 9,
+					border: '1px solid ' + T.borderL2,
+					background: T.bgOverlay,
+					boxShadow: T.shadow,
+					fontSize: 12.5,
+				},
+			}, [
+				h('div', { key: 't', style: { fontWeight: 600, marginBottom: 8 } }, title),
+				h('div', {
+					key: 'm',
+					style: { color: T.labelSecondary, marginBottom: 8, overflowWrap: 'anywhere' },
+				}, confirming
+					? '「' + (prompt.node === undefined ? '' : prompt.node.name) + '」会被移到知识库的 .trash 文件夹，可以手动移回来。'
+					: (prompt.node === undefined || prompt.node.name === undefined ? '' : '当前：' + prompt.node.name)),
+				confirming ? null : h('input', {
+					key: 'i',
+					value,
+					// No `autoFocus`: in jsdom React takes its input-event polyfill path and
+					// reaches for `activeElement.attachEvent`, which throws. The dialog is
+					// keyboard-first anyway (Enter submits, Escape cancels).
+					onChange: (event) => setValue(event.target.value),
+					placeholder: field,
+					style: {
+						width: '100%',
+						boxSizing: 'border-box',
+						padding: '5px 7px',
+						borderRadius: 5,
+						border: '1px solid ' + T.borderL1,
+						background: T.bgLayer1,
+						color: 'inherit',
+						font: 'inherit',
+						fontSize: 12.5,
+						outline: 'none',
+					},
+				}),
+				h('div', {
+					key: 'b',
+					style: { display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 10 },
+				}, [
+					h('button', {
+						key: 'c',
+						type: 'button',
+						onClick: () => props.onCancel(),
+						style: promptButtonStyle(false),
+					}, '取消'),
+					h('button', {
+						key: 'o',
+						type: 'button',
+						disabled: invalid,
+						onClick: submit,
+						style: promptButtonStyle(true, confirming),
+					}, confirming ? '移入 .trash' : '确定'),
+				]),
+			]));
+		}
+
+		/** Button styling shared by the prompt's two actions. */
+		function promptButtonStyle(primary, danger) {
+			return {
+				padding: '4px 10px',
+				borderRadius: 5,
+				border: '1px solid ' + (primary ? 'transparent' : T.borderL1),
+				background: primary ? (danger === true ? T.error : T.brand) : 'transparent',
+				color: primary ? '#fff' : 'inherit',
+				font: 'inherit',
+				fontSize: 12.5,
+				cursor: 'pointer',
+			};
+		}
+
 		// ── shared bits ──────────────────────────────────────────────────────
 
 		function useHover() {
@@ -2176,6 +2452,16 @@ window.__ModuleLoader__.load({
 
 			const row = h('div', {
 				onClick: () => { if (isDir) props.onToggle(node.path); else props.onSelect(node.path); },
+				// Right-click opens the row's menu. The browser's own menu would otherwise
+				// cover the panel, and the panel's actions are the useful ones here.
+				onContextMenu: (event) => {
+					event.preventDefault();
+					event.stopPropagation();
+					if (typeof props.onMenu === 'function') props.onMenu(node, event.clientX, event.clientY);
+				},
+				// Marks the row for the menu's outside-click test: a press on the row whose
+				// menu is open is the toggle, not "somewhere else".
+				'data-dsh-obsidian-row': node.path,
 				title: node.path,
 				style: {
 					display: 'flex',
@@ -2235,6 +2521,39 @@ window.__ModuleLoader__.load({
 						},
 					}, h(HandoffIcon, { key: 'i', size: 13 }), '发送')
 					: null,
+				// The visible half of the context menu: a right-click is undiscoverable, so
+				// the same menu is one click away on hover. Same target, same items.
+				hovered || active
+					? h('button', {
+						key: 'more',
+						type: 'button',
+						title: '更多操作',
+						'aria-label': '更多操作',
+						'aria-haspopup': 'menu',
+						onClick: (event) => {
+							event.preventDefault();
+							event.stopPropagation();
+							const rect = event.currentTarget.getBoundingClientRect();
+							if (typeof props.onMenu === 'function') props.onMenu(node, rect.left, rect.bottom);
+						},
+						style: {
+							display: 'flex',
+							alignItems: 'center',
+							justifyContent: 'center',
+							width: 20,
+							height: 20,
+							padding: 0,
+							border: 'none',
+							borderRadius: 4,
+							background: 'transparent',
+							color: T.labelSecondary,
+							font: 'inherit',
+							fontSize: 14,
+							lineHeight: 1,
+							cursor: 'pointer',
+						},
+					}, '⋯')
+					: null,
 			]);
 
 			// Children arrive lazily: `undefined` means "not fetched yet", which is
@@ -2291,6 +2610,7 @@ window.__ModuleLoader__.load({
 										onToggle: props.onToggle,
 										onSelect: props.onSelect,
 										onAttach: props.onAttach,
+										onMenu: props.onMenu,
 										onRetry: props.onRetry,
 									})),
 								levelTruncated === undefined ? null : truncatedNotice('trunc', levelTruncated),
@@ -2552,6 +2872,18 @@ window.__ModuleLoader__.load({
 				showFeedback(ATTACH_MESSAGE[mentionInto(props.inputActions, absoluteVaultPath(vaultRoot, path))]);
 			}, [vaultRoot, props.inputActions, showFeedback]);
 
+			// The tree renders its rows before the menu block below is reached, so the state
+			// those rows need lives here: a `const` declared further down would still be in its
+			// temporal dead zone when the row is created.
+			const [menu, setMenu] = React.useState(null);
+			// One click opens the menu, the next closes it: a menu that only ever opens
+			// reads as stuck, and the row's own press must not be swallowed by the
+			// outside-click test below.
+			const openMenu = React.useCallback((node, x, y) => {
+				setMenu((current) => (current !== null && current.node.path === node.path ? null : { node, x, y }));
+			}, []);
+
+
 			// Debounced vault search. A live query shows its results in place of the
 			// tree; clearing it restores the tree. Every request carries a sequence
 			// number: a slow answer to an earlier query must never overwrite a newer
@@ -2690,12 +3022,187 @@ window.__ModuleLoader__.load({
 								onToggle: toggleDir,
 								onSelect: openNote,
 								onAttach: attachToConversation,
+								onMenu: openMenu,
 								onRetry: retryDir,
 							})),
 						]);
 
+
 			const needsVault = vaultInfo !== null
 				&& (vaultInfo.chosen === null || vaultInfo.chosen === undefined);
+
+			// ── the row menu ─────────────────────────────────────────────────
+			//
+			// The menu's actions are the panel's capabilities, not a second way to do
+			// things: `引用到对话` is the tree's own handoff, `编辑` hands the page a
+			// `pendingEdit`, and the three writes go through routes that validate the path
+			// against the vault root before touching a file.
+
+			const [prompt, setPrompt] = React.useState(null);
+			const closeMenu = React.useCallback(() => setMenu(null), []);
+
+			/** The vault-relative folder one path lives in; '' is the vault root. */
+			const parentOf = (path) => {
+				const slash = String(path).lastIndexOf('/');
+				return slash < 0 ? '' : String(path).slice(0, slash);
+			};
+
+			const copyText = React.useCallback((text) => {
+				if (typeof navigator === 'undefined' || navigator.clipboard === undefined) {
+					showFeedback('这个环境没有剪贴板接口');
+					return;
+				}
+				navigator.clipboard.writeText(text === '' ? ' ' : text).then(
+					() => showFeedback('已复制：' + text),
+					(error) => showFeedback('复制失败：' + String(error && error.message ? error.message : error)),
+				);
+			}, [showFeedback]);
+
+			const editNote = React.useCallback((path) => {
+				pendingEdit.add(path);
+				openNote(path);
+			}, [openNote]);
+
+			const revealPath = React.useCallback((path) => {
+				// `hostRouteFailure` is declared below, but only RUNS at click time, after the
+				// whole component body has been evaluated.
+				postJson(API.reveal, { path }).then(
+					(data) => {
+						// Say WHERE it opened. The window is a launcher hand-off and often appears
+						// behind the app, so "已打开" alone left the reader hunting for it.
+						const folder = typeof data.folder === 'string' && data.folder !== '' ? data.folder : '';
+						showFeedback(folder === ''
+							? '已在资源管理器中打开（窗口可能在后台）'
+							: '已在资源管理器中打开：' + folder + '（窗口可能在后台）', 3600);
+					},
+					hostRouteFailure('在文件管理器中显示'),
+				);
+			}, [showFeedback]);
+
+			// `显示` / `重命名` / `新建` / `移到 .trash` are host routes, so a client-only
+			// update leaves them unregistered until DSH restarts. The web server answers 404
+			// or 405 there, which tells a reader nothing — name the actual cause instead.
+			const hostRouteFailure = (prefix) => (error) => {
+				const message = String(error && error.message ? error.message : error);
+				if (/HTTP (404|405)/.test(message)) {
+					showFeedback('宿主还是旧版，重启 DSH 后这条才可用（' + prefix + '）', 4200);
+					return;
+				}
+				showFeedback(prefix + '失败：' + message, 4200);
+			};
+
+			const submitPrompt = React.useCallback((value) => {
+				const current = prompt;
+				if (current === null) return;
+				setPrompt(null);
+				const node = current.node;
+				// A write changes the vault, so the cached index is stale the moment it
+				// succeeds: the related panel would keep showing the old name for up to 15 s.
+				const refreshIndexAfterWrite = () => { loadVaultIndex(true).catch(() => undefined); };
+				if (current.kind === 'trash') {
+					postJson(API.trash, { path: node.path }).then((data) => {
+						showFeedback('已移到 ' + String(data.to === undefined ? '.trash' : data.to));
+						retryDir(parentOf(node.path));
+						refreshIndexAfterWrite();
+					}).catch(hostRouteFailure('移到 .trash'));
+					return;
+				}
+				if (current.kind === 'rename') {
+					postJson(API.rename, { path: node.path, name: value }).then((data) => {
+						showFeedback('已重命名为 ' + String(data.to).split('/').pop());
+						retryDir(parentOf(node.path));
+						// Keep the tree's own highlight on the note that was renamed; an
+						// already-open page keeps its old address until it is reopened.
+						if (selected === node.path) setSelected(String(data.to));
+						refreshIndexAfterWrite();
+					}).catch(hostRouteFailure('重命名'));
+					return;
+				}
+				const dir = node.type === 'dir' ? node.path : parentOf(node.path);
+				postJson(API.create, { dir, name: value }).then((data) => {
+					showFeedback('已新建 ' + String(data.path).split('/').pop());
+					retryDir(dir);
+					openNote(data.path);
+					refreshIndexAfterWrite();
+				}).catch(hostRouteFailure('新建笔记'));
+			}, [prompt, retryDir, openNote, showFeedback, selected]);
+
+			const menuItems = React.useMemo(() => {
+				if (menu === null) return [];
+				const node = menu.node;
+				const isDir = node.type === 'dir';
+				const absolute = absoluteVaultPath(vaultRoot, node.path);
+				const nameNoExt = String(node.name).replace(/\.[^./]+$/, '');
+				if (isDir) {
+					return [
+						{ id: 'create', label: '新建笔记…', run: () => setPrompt({ kind: 'create', node }) },
+						{ id: 'reveal', label: '在文件管理器中显示', run: () => revealPath(node.path) },
+					];
+				}
+				const menuItem = (id, label, run, extra) => Object.assign({ id, label, run }, extra === undefined ? {} : extra);
+				// `once` marks an action whose duplicate is VISIBLE — a second window, a second
+				// tab, a second inserted mention. Only those are guarded; opening a dialog twice
+				// would just be the same dialog, and guarding it would swallow a real second
+				// click ("重命名…" right after a rename did nothing).
+				// Deliberately short. The reader's own rule: `引用到对话` is the action that
+				// earns its place; `把正文插入对话` and three of the four copy spellings did
+				// not, so they are gone. `复制 [[名称]]` stays because it is how a link gets
+				// built in another note, which is the one copy that is not busywork.
+				return [
+					menuItem('open', '打开', () => openNote(node.path), { once: true }),
+					menuItem('edit', '编辑', () => editNote(node.path), { once: true }),
+					{ separator: true },
+					menuItem('attach', '引用到对话（@提及）', () => attachToConversation(node.path), { once: true }),
+					menuItem('wlink', '复制 [[' + nameNoExt + ']]', () => copyText('[[' + nameNoExt + ']]')),
+					{ separator: true },
+					menuItem('related', '查看关联', () => { pendingRelated.add(node.path); openNote(node.path); }, { once: true }),
+					menuItem('reveal', '在文件管理器中显示', () => revealPath(node.path), { once: true }),
+					menuItem('obsidian', '在 Obsidian 中打开', () => {
+						openInObsidian(node.path).catch((error) => showFeedback('打不开 Obsidian：' + String(error && error.message ? error.message : error)));
+					}, { once: true }),
+					{ separator: true },
+					menuItem('rename', '重命名…', () => setPrompt({ kind: 'rename', node, initial: node.name })),
+					menuItem('trash', '移到 .trash…', () => setPrompt({ kind: 'trash', node }), { danger: true }),
+				];
+			}, [menu, vaultRoot, openNote, editNote, attachToConversation, copyText, revealPath, showFeedback]);
+
+			// One action per click. The menu closes on `mousedown` while the browser is still
+			// resolving the click, and a re-render between those two can deliver the click
+			// again — which is how "在文件管理器中显示" opened two windows from one click.
+			// Only `once` items are guarded (see above), and the key includes the node so a
+			// second ROW inside the window is not swallowed as a repeat.
+			const lastAction = React.useRef({ key: '', at: 0 });
+			const runItem = React.useCallback((item, scope) => {
+				if (item.once === true) {
+					const key = String(scope === undefined || scope === null ? '' : scope) + '|' + item.id;
+					const now = Date.now();
+					if (lastAction.current.key === key && now - lastAction.current.at < 800) return;
+					lastAction.current = { key, at: now };
+				}
+				if (typeof item.run === 'function') item.run();
+			}, []);
+
+			// One menu instance for the whole tree, and one dialog: a per-row menu would
+			// mount an event listener per node, and two open menus are never useful.
+			const overlays = [
+				h(VaultContextMenu, {
+					key: 'menu',
+					state: menu,
+					items: menuItems,
+					onClose: closeMenu,
+					onRun: (item) => {
+						const scope = menu === null ? '' : menu.node.path;
+						closeMenu();
+						runItem(item, scope);
+					},
+				}),
+				h(VaultPrompt, {
+					key: 'prompt',
+					prompt,
+					onCancel: () => setPrompt(null),
+					onSubmit: submitPrompt,
+				}),
+			];
 
 			// The first-run chooser. It does not vanish once a vault is agreed to: the
 			// header keeps a folder button, and this is what that button changes.
@@ -2842,6 +3349,7 @@ window.__ModuleLoader__.load({
 					key: 'body',
 					style: { flex: '1 1 auto', minHeight: 0, overflowY: 'auto' },
 				}, browseBody),
+				...overlays,
 			]);
 			};
 		}
@@ -3123,6 +3631,38 @@ window.__ModuleLoader__.load({
 					const timer = setTimeout(() => jumpToAnchor(pending), 0);
 					return () => clearTimeout(timer);
 				}, [note, path, jumpToAnchor]);
+
+				// The tree menu's `编辑`: the page opens already editing. Deferred a tick for
+				// the same reason as the anchor above — the body has to exist first.
+				React.useEffect(() => {
+					if (note === null || path === undefined) return undefined;
+					if (!pendingEdit.has(path)) return undefined;
+					pendingEdit.delete(path);
+					if (note.truncated === true) {
+						keepFeedback('这篇笔记被截断显示，为免覆盖原文，不能编辑', 4200);
+						return undefined;
+					}
+					const timer = setTimeout(() => {
+						setDraftText(note.text);
+						setEditing(true);
+					}, 0);
+					return () => clearTimeout(timer);
+				}, [note, path, keepFeedback]);
+
+				// The tree menu's `查看关联`: scroll the edges into view once they are drawn.
+				React.useEffect(() => {
+					if (note === null || path === undefined) return undefined;
+					if (!pendingRelated.has(path)) return undefined;
+					pendingRelated.delete(path);
+					const timer = setTimeout(() => {
+						const host = bodyRef.current;
+						const panel = host === null ? null : host.querySelector('[data-dsh-obsidian-related]');
+						if (panel !== null && typeof panel.scrollIntoView === 'function') {
+							panel.scrollIntoView({ block: 'start', behavior: 'smooth' });
+						}
+					}, 0);
+					return () => clearTimeout(timer);
+				}, [note, path]);
 
 				/** The headings currently on screen, in document order. */
 				const collectOutline = React.useCallback(() => {
@@ -3644,7 +4184,7 @@ window.__ModuleLoader__.load({
 		 * running the bundle I just installed?" is answerable without a console — it is
 		 * the first question after any "I still see the old behaviour" report.
 		 */
-		const CLIENT_BUILD = '1.5.2';
+		const CLIENT_BUILD = '1.6.0';
 
 		const registrationReport = { build: CLIENT_BUILD, ok: [], failed: [] };
 
@@ -3804,6 +4344,10 @@ window.__ModuleLoader__.load({
 			PropertiesCard,
 			RelatedPanel,
 			LinkPreview,
+			// The tree menu and its dialog: render-check asserts their composition without
+			// mounting the whole panel.
+			VaultContextMenu,
+			VaultPrompt,
 		};
 		return module.exports;
 	},

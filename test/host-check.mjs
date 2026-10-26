@@ -63,6 +63,12 @@ const EXPECTED_ROUTES = [
   // how `/diag` went unexercised.
   '/dsh-obsidian/diag',
   '/dsh-obsidian/vault',
+  // The tree menu's routes: the index it reads, plus the three writes and the reveal.
+  '/dsh-obsidian/links',
+  '/dsh-obsidian/reveal',
+  '/dsh-obsidian/rename',
+  '/dsh-obsidian/note/create',
+  '/dsh-obsidian/note/trash',
 ]
 for (const path of EXPECTED_ROUTES) {
   if (!routes.has(path)) throw new Error('route not registered: ' + path)
@@ -284,6 +290,125 @@ expect(
   refreshedIndex.status === 200 && typeof refreshedIndex.body.generatedAt === 'number' && refreshedIndex.body.generatedAt >= links.body.generatedAt,
   JSON.stringify({ first: links.body.generatedAt, refreshed: refreshedIndex.body.generatedAt }),
 )
+
+// ── the tree menu's writes ─────────────────────────────────────────────────
+// Besides `/note` (which saves an edit), these are the only routes that touch a file in
+// the vault. A traversal, an overwrite or a "delete" that is not a move loses a note, so
+// every one is exercised against real files this harness creates and removes itself.
+{
+  const vaultPath = typeof status.body.vaultPath === 'string' && status.body.vaultPath !== ''
+    ? status.body.vaultPath
+    : undefined
+  if (vaultPath === undefined) {
+    skip('the menu writes are exercised', 'status reported no vault path')
+  } else {
+    const probeDir = 'dshMenuProbe' + Date.now()
+    const probeAbs = join(vaultPath, probeDir)
+    mkdirSync(probeAbs, { recursive: true })
+    const trashAbs = join(vaultPath, '.trash')
+    const beforeTrash = existsSync(trashAbs) ? new Set(readdirSync(trashAbs)) : new Set()
+    try {
+      const created = await call('POST', '/dsh-obsidian/note/create', { dir: probeDir, name: '探针一' })
+      expect('create makes a note', created.status === 201 && created.body.created === true, JSON.stringify(created.body))
+      const createdPath = created.body.path
+      expect('the created path is inside the probe folder', typeof createdPath === 'string' && createdPath.startsWith(probeDir + '/'), createdPath)
+      const createdNote = await call('GET', '/dsh-obsidian/note?path=' + encodeURIComponent(createdPath))
+      expect(
+        'a created note carries a minimal frontmatter',
+        createdNote.status === 200 && /^---\ntitle: /.test(String(createdNote.body.text)),
+        String(createdNote.body.text).slice(0, 40),
+      )
+      const duplicate = await call('POST', '/dsh-obsidian/note/create', { dir: probeDir, name: '探针一' })
+      expect('create refuses an existing name', duplicate.status === 400, JSON.stringify(duplicate.body))
+      const traversalName = await call('POST', '/dsh-obsidian/note/create', { dir: probeDir, name: '..\\逃逸' })
+      expect('create refuses a traversing name', traversalName.status === 400, JSON.stringify(traversalName.body))
+      const traversalDir = await call('POST', '/dsh-obsidian/note/create', { dir: '../../etc', name: 'x' })
+      expect('create refuses a traversing folder', traversalDir.status === 400, JSON.stringify(traversalDir.body))
+
+      const renamed = await call('POST', '/dsh-obsidian/rename', { path: createdPath, name: '探针二' })
+      expect('rename answers with the new path', renamed.status === 200 && typeof renamed.body.to === 'string', JSON.stringify(renamed.body))
+      const renamedPath = renamed.body.to
+      expect('rename keeps the extension', typeof renamedPath === 'string' && renamedPath.endsWith('.md'), String(renamedPath))
+      const oldGone = await call('GET', '/dsh-obsidian/note?path=' + encodeURIComponent(createdPath))
+      expect('the old path is gone after a rename', oldGone.status === 404, String(oldGone.status))
+      const renamedNote = await call('GET', '/dsh-obsidian/note?path=' + encodeURIComponent(renamedPath))
+      expect('the renamed note is readable', renamedNote.status === 200 && renamedNote.body.text.length > 0, String(renamedNote.status))
+
+      // An existing target must never be overwritten by a rename.
+      await call('POST', '/dsh-obsidian/note/create', { dir: probeDir, name: '探针三' })
+      const collide = await call('POST', '/dsh-obsidian/rename', { path: renamedPath, name: '探针三' })
+      expect('rename refuses an existing target', collide.status === 400, JSON.stringify(collide.body))
+      const pathName = await call('POST', '/dsh-obsidian/rename', { path: renamedPath, name: 'a/b' })
+      expect('rename refuses a path name', pathName.status === 400, JSON.stringify(pathName.body))
+      // Names Windows rewrites or refuses: `甲.` would silently become `甲`, and `NUL` is a
+      // device, not a file. Both are refused as a message instead of an errno.
+      const trailingDot = await call('POST', '/dsh-obsidian/rename', { path: renamedPath, name: '探针四.' })
+      expect('rename refuses a trailing dot', trailingDot.status === 400, JSON.stringify(trailingDot.body))
+      const reserved = await call('POST', '/dsh-obsidian/rename', { path: renamedPath, name: 'NUL.md' })
+      expect('rename refuses a reserved device name', reserved.status === 400, JSON.stringify(reserved.body))
+      const reservedCreate = await call('POST', '/dsh-obsidian/note/create', { dir: probeDir, name: 'CON' })
+      expect('create refuses a reserved device name', reservedCreate.status === 400, JSON.stringify(reservedCreate.body))
+
+      const trashed = await call('POST', '/dsh-obsidian/note/trash', { path: renamedPath })
+      expect('trash answers with where it went', trashed.status === 200 && typeof trashed.body.to === 'string', JSON.stringify(trashed.body))
+      expect('trash moves into the vault\'s .trash', String(trashed.body.to).startsWith('.trash/'), String(trashed.body.to))
+      expect('trash keeps a timestamp prefix', /^\.trash\/\d{8}-\d{6}-/.test(String(trashed.body.to)), String(trashed.body.to))
+      const afterTrash = await call('GET', '/dsh-obsidian/note?path=' + encodeURIComponent(renamedPath))
+      expect('the note is gone from its folder after a trash', afterTrash.status === 404, String(afterTrash.status))
+      const trashListing = await call('GET', '/dsh-obsidian/tree?path=' + encodeURIComponent('.trash'))
+      expect('the .trash folder is not a readable level', trashListing.status === 400, JSON.stringify(trashListing.body))
+
+      // `reveal` runs through the fake subprocess, so no file manager window opens.
+      const spawnedBefore = spawned.length
+      const revealed = await call('POST', '/dsh-obsidian/reveal', { path: probeDir + '/探针三.md' })
+      expect('reveal answers', revealed.status === 200 && revealed.body.revealed === true, JSON.stringify(revealed.body))
+      expect('reveal names the folder it opened', typeof revealed.body.folder === 'string' && revealed.body.folder === probeDir, JSON.stringify(revealed.body.folder))
+      expect('reveal spawned the platform opener', spawned.length === spawnedBefore + 1, JSON.stringify(spawned[spawned.length - 1]?.argv))
+      // Windows goes through the running shell (COM) because `explorer /select` inherits the
+      // caller's hidden show-state: the window was created, selected and INVISIBLE. The
+      // helper carries the path as `-EncodedCommand` so a Chinese path survives.
+      const revealSpawn = spawned[spawned.length - 1]
+      if (process.platform === 'win32') {
+        expect('reveal uses the shell helper on Windows', revealed.body.via === 'shell-com', String(revealed.body.via))
+        expect(
+          'the shell helper carries an encoded command',
+          Array.isArray(revealSpawn.argv) && revealSpawn.argv.includes('-EncodedCommand')
+            && /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(String(revealSpawn.argv[revealSpawn.argv.length - 1])),
+          String(revealSpawn.argv[revealSpawn.argv.length - 1]).slice(0, 40),
+        )
+      } else {
+        expect('reveal uses the platform opener', ['open', 'xdg-open'].includes(revealed.body.via), String(revealed.body.via))
+      }
+      // One click must not open two windows: a second call inside the settle window is the
+      // same click arriving twice, and it must not spawn a second file manager.
+      const repeat = await call('POST', '/dsh-obsidian/reveal', { path: probeDir + '/探针三.md' })
+      expect('a repeated reveal is deduped', repeat.status === 200 && repeat.body.deduped === true, JSON.stringify(repeat.body))
+      expect('a deduped reveal spawns nothing', spawned.length === spawnedBefore + 1, String(spawned.length - spawnedBefore))
+      expect('a directory cannot be revealed as a note path that escapes', (await call('POST', '/dsh-obsidian/reveal', { path: '../../x' })).status === 400)
+      // A FOLDER row must report the folder itself, not its parent: `folder` is what the
+      // panel prints as "opened in …", and the parent is the wrong place. Asserted after the
+      // dedupe block because it changes which path the settle window is about.
+      const revealedDir = await call('POST', '/dsh-obsidian/reveal', { path: probeDir })
+      expect(
+        'revealing a folder names that folder',
+        revealedDir.status === 200 && revealedDir.body.folder === probeDir,
+        JSON.stringify({ status: revealedDir.status, folder: revealedDir.body.folder }),
+      )
+      // `open`'s assertions below count the spawns THEY produce (exactly one), so the
+      // reveal spawns this block made are cleared rather than left to inflate that count.
+      spawned.length = 0
+    } finally {
+      // Everything this harness made, including the trash copies it produced.
+      rmSync(probeAbs, { recursive: true, force: true })
+      if (existsSync(trashAbs)) {
+        for (const name of readdirSync(trashAbs)) {
+          if (beforeTrash.has(name)) continue
+          rmSync(join(trashAbs, name), { force: true })
+        }
+      }
+    }
+  }
+}
 
 // ── search ─────────────────────────────────────────────────────────────────
 const search = await call('GET', '/dsh-obsidian/search?q=' + encodeURIComponent('知识库') + '&limit=10')

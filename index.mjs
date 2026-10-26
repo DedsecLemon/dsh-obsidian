@@ -8,7 +8,7 @@
 // Every path that arrives from the browser is resolved against the vault root
 // and rejected when it escapes.
 
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, join, posix, relative, resolve, sep, win32 } from 'node:path'
 
@@ -24,6 +24,10 @@ const ROUTE_RESOLVE = '/dsh-obsidian/resolve-link'
 const ROUTE_DIAG = '/dsh-obsidian/diag'
 const ROUTE_VAULT = '/dsh-obsidian/vault'
 const ROUTE_LINKS = '/dsh-obsidian/links'
+const ROUTE_REVEAL = '/dsh-obsidian/reveal'
+const ROUTE_RENAME = '/dsh-obsidian/rename'
+const ROUTE_CREATE = '/dsh-obsidian/note/create'
+const ROUTE_TRASH = '/dsh-obsidian/note/trash'
 
 /** Directories that are never part of the note surface. */
 const SKIP_DIRS = new Set([
@@ -449,6 +453,180 @@ function readNote(root, relativePath) {
   }
 }
 
+/** Today, as the date Obsidian writes into `created:`. */
+function todayIso() {
+  const now = new Date()
+  return now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0')
+}
+
+/**
+ * One path segment a rename or a new note may use.
+ *
+ * The vault is the reader's own directory, so a "name" that is really a path is a way
+ * to write anywhere in it. `..`, `.`, separators and a leading dot are refused here
+ * rather than filtered later: a name that needs sanitising is a name the caller got wrong.
+ */
+function singleSegmentName(name) {
+  const text = String(name === undefined || name === null ? '' : name).trim()
+  if (text === '') throw new Error('name is required')
+  if (text === '.' || text === '..') throw new Error('name must not be . or ..')
+  if (text.includes('/') || text.includes('\\')) throw new Error('name must be a single path segment')
+  if (text.startsWith('.')) throw new Error('name must not start with a dot')
+  // Windows strips a trailing dot or space, so `甲.` would silently become `甲` and the
+  // caller would think it created something it did not.
+  if (/[. ]$/.test(text)) throw new Error('name must not end with a dot or a space')
+  if (/[\u0000-\u001f]/.test(text)) throw new Error('name must not contain control characters')
+  // Device names are not files, with or without an extension: `CON` fails, `CON.md` opens
+  // the console. Refusing them here keeps the failure a message instead of an errno.
+  if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(text)) {
+    throw new Error('name uses a reserved device name')
+  }
+  return text
+}
+
+/** `rename` inside one folder. Links in other notes are NOT rewritten — see README. */
+function renameNote(root, relativePath, name) {
+  const absolute = safeResolve(root, relativePath)
+  if (absolute === undefined) throw new Error('path escapes the vault')
+  if (hasDotSegment(relativePath)) throw new Error('hidden paths are not notes')
+  if (!existsSync(absolute)) throw new Error('note does not exist')
+  if (!statSync(absolute).isFile()) throw new Error('not a file')
+  if (!NOTE_FILE.test(basename(absolute))) throw new Error('not a note')
+  const clean = singleSegmentName(name)
+  const extension = /\.[^./]+$/.exec(basename(absolute))
+  const withExtension = /\.[^./]+$/.test(clean) ? clean : clean + (extension === null ? '.md' : extension[0])
+  const target = join(dirname(absolute), withExtension)
+  if (target === absolute) throw new Error('the name is unchanged')
+  if (existsSync(target)) throw new Error('a file named ' + withExtension + ' already exists here')
+  renameSync(absolute, target)
+  return { from: toVaultPath(root, absolute), to: toVaultPath(root, target) }
+}
+
+/** Create one note with a minimal frontmatter when no text is supplied. */
+function createNote(root, dir, name, text) {
+  const cleanDir = String(dir === undefined || dir === null ? '' : dir).trim()
+  const folder = cleanDir === '' ? root : safeResolve(root, cleanDir)
+  if (folder === undefined) throw new Error('path escapes the vault')
+  if (cleanDir !== '' && hasDotSegment(cleanDir)) throw new Error('hidden folders are not note folders')
+  if (!existsSync(folder) || !statSync(folder).isDirectory()) throw new Error('not a folder')
+  const clean = singleSegmentName(name)
+  const withExtension = /\.[^./]+$/.test(clean) ? clean : clean + '.md'
+  const target = join(folder, withExtension)
+  if (existsSync(target)) throw new Error('a file named ' + withExtension + ' already exists here')
+  const title = withExtension.replace(/\.[^./]+$/, '')
+  const body = typeof text === 'string' && text !== ''
+    ? text
+    : '---\ntitle: ' + JSON.stringify(title) + '\ncreated: ' + todayIso() + '\nstatus: draft\n---\n'
+  if (Buffer.byteLength(body, 'utf8') > MAX_WRITE_BYTES) throw new Error('content is too large to save')
+  writeFileSync(target, body, 'utf8')
+  return { path: toVaultPath(root, target) }
+}
+
+/**
+ * Move a note into the vault's own `.trash` folder instead of deleting it.
+ *
+ * `.trash` is already in `SKIP_DIRS`, so the note disappears from the panel while
+ * remaining one move away from recovery. The panel never destroys a file: a reader who
+ * clicks the wrong row should lose a click, not a note.
+ */
+function trashNote(root, relativePath) {
+  const absolute = safeResolve(root, relativePath)
+  if (absolute === undefined) throw new Error('path escapes the vault')
+  if (hasDotSegment(relativePath)) throw new Error('hidden paths are not notes')
+  if (!existsSync(absolute)) throw new Error('note does not exist')
+  if (!statSync(absolute).isFile()) throw new Error('not a file')
+  const trashDir = join(root, '.trash')
+  mkdirSync(trashDir, { recursive: true })
+  const now = new Date()
+  const pad = (value) => String(value).padStart(2, '0')
+  const stamp = now.getFullYear() + pad(now.getMonth() + 1) + pad(now.getDate())
+    + '-' + pad(now.getHours()) + pad(now.getMinutes()) + pad(now.getSeconds())
+  let target = join(trashDir, stamp + '-' + basename(absolute))
+  for (let suffix = 1; existsSync(target); suffix += 1) {
+    target = join(trashDir, stamp + '-' + suffix + '-' + basename(absolute))
+  }
+  renameSync(absolute, target)
+  return { from: toVaultPath(root, absolute), to: toVaultPath(root, target) }
+}
+
+/**
+ * The command that shows a file (Windows) or its folder (elsewhere) in the OS file
+ * manager. Returned rather than run, so the route can use the plugin's subprocess service.
+ */
+function revealCommand(platform, absolute, isDirectory) {
+  if (platform === 'win32') return { argv: ['explorer.exe', '/select,' + absolute], via: 'explorer' }
+  if (platform === 'darwin') return { argv: ['open', '-R', absolute], via: 'open' }
+  return { argv: ['xdg-open', isDirectory ? absolute : dirname(absolute)], via: 'xdg-open' }
+}
+
+/**
+ * Windows: open + select through the RUNNING shell (COM), not through a spawned child.
+ *
+ * `explorer.exe /select,<path>` inherits the caller's `STARTUPINFO` show-state, so a
+ * window opened by a spawned child comes out **hidden** — measured on this machine: the
+ * file manager ran, the folder was open, `IsWindowVisible` was false on every window we
+ * created, and the reader therefore saw nothing. Asking the already-running shell
+ * (`Shell.Application.Explore`) creates the window in the shell's own process, where it is
+ * visible, and the same object can select the item and raise the window.
+ *
+ * The script travels as `-EncodedCommand` (UTF-16LE, base64 = pure ASCII) because a
+ * command line carrying a Chinese path is the other way this breaks: a .ps1 written as
+ * UTF-8 is read as ANSI by Windows PowerShell, and an argv round-trip can mangle the path.
+ *
+ * @param folder - absolute folder to show.
+ * @param file - file name to select inside it, or '' for the folder itself.
+ */
+function revealScript(folder, file) {
+  const quoted = (value) => "'" + String(value).replace(/'/g, "''") + "'"
+  return [
+    '$ErrorActionPreference = "SilentlyContinue"',
+    AddTypeForeground().trim(),
+    '$shell = New-Object -ComObject Shell.Application',
+    '$folder = ' + quoted(folder),
+    '$shell.Explore($folder)',
+    'Start-Sleep -Milliseconds 400',
+    '$target = $null',
+    'foreach ($w in @($shell.Windows())) {',
+    '  try { if ($w.Document.Folder.Self.Path -eq $folder) { $target = $w } } catch { }',
+    '}',
+    'if ($target -ne $null) {',
+    '  try { $target.Visible = $true } catch { }',
+    '  if (' + quoted(file) + ' -ne "") {',
+    '    $item = $shell.Namespace($folder).ParseName(' + quoted(file) + ')',
+    '    if ($item -ne $null) { try { $target.Document.SelectItem($item, 1) } catch { } }',
+    '  }',
+    '  try { [RevealWin32]::Raise([IntPtr]$target.HWND) } catch { }',
+    '}',
+  ].join('\r\n')
+}
+
+/**
+ * The two user32 calls the reveal script needs, as a here-string.
+ *
+ * `Add-Type` compiles this in the helper process; a machine with the runtime unavailable
+ * only loses the raise-to-front part, because every call site wraps it in try/catch.
+ */
+function AddTypeForeground() {
+  return [
+    'try {',
+    "  Add-Type -TypeDefinition @'",
+    'using System;',
+    'using System.Runtime.InteropServices;',
+    'public class RevealWin32 {',
+    '  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);',
+    '  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);',
+    '  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);',
+    '  public static void Raise(IntPtr h) {',
+    '    if (IsIconic(h)) ShowWindow(h, 9);',
+    '    ShowWindow(h, 5);',
+    '    SetForegroundWindow(h);',
+    '  }',
+    '}',
+    "'@",
+    '} catch { }',
+  ].join('\r\n')
+}
+
 /**
  * Case-insensitive substring search across note files.
  *
@@ -839,6 +1017,17 @@ function buildLinkIndex(root) {
 let linkIndexMemo = null
 
 /**
+ * The last reveal, so one click that somehow arrives twice cannot open two windows.
+ *
+ * The client already refuses to run the same menu action twice inside 800 ms; this is the
+ * belt to that braces, because "open the file manager" is the one action whose duplicate
+ * is visible as a second window rather than as a repeated message.
+ */
+let lastReveal = { root: '', path: '', at: 0 }
+/** How long two reveals of the SAME path count as one click. */
+const REVEAL_SETTLE_MS = 1200
+
+/**
  * @param root - vault root.
  * @param force - rebuild instead of reusing the memo.
  */
@@ -1174,6 +1363,13 @@ export const __internals = Object.freeze({
   buildLinkIndex,
   frontmatterOf,
   plainTextOf,
+  // The write helpers, for the same reason: a route's safety rules are worth asserting
+  // without an HTTP call, and a rename that escapes the vault is the worst bug here.
+  createNote,
+  renameNote,
+  trashNote,
+  revealCommand,
+  revealScript,
 })
 
 /**
@@ -1389,6 +1585,158 @@ export function apply(ctx) {
           if (root === undefined) throw new Error('no Obsidian vault resolved')
           const params = new URL(req.url ?? '/', 'http://x').searchParams
           sendJson(res, 200, linkIndex(root, params.get('refresh') === '1'))
+        } catch (error) {
+          sendFailure(res, error, 400)
+        }
+      },
+    })
+
+    // Show a note (or a folder) in the OS file manager. The spawn is fire-and-forget on
+    // purpose: the file manager is already running, and `explorer.exe` exits non-zero
+    // even when it worked, so its exit code says nothing about success.
+    http.webServer.register({
+      kind: 'exact',
+      path: ROUTE_REVEAL,
+      handler: async (req, res) => {
+        try {
+          if (!allowMethod(req, res)) return
+          if (req.method !== 'POST') throw new Error('POST is required')
+          const root = vaultRoot()
+          if (root === undefined) throw new Error('no Obsidian vault resolved')
+          const body = await readJsonBody(req)
+          const relativePath = typeof body.path === 'string' ? body.path : ''
+          const absolute = safeResolve(root, relativePath)
+          if (absolute === undefined) throw new Error('path escapes the vault')
+          if (!existsSync(absolute)) throw new Error('path does not exist')
+          const stats = statSync(absolute)
+          const isDirectory = stats.isDirectory()
+          // The folder a reader is meant to see. For a note that is its parent; for a folder
+          // row it is the folder ITSELF — reporting the parent of a directory was wrong.
+          const shownFolder = isDirectory ? absolute : dirname(absolute)
+          // One click, one window: a duplicate arriving within `REVEAL_SETTLE_MS` is the
+          // same click reaching us twice, and opening a second file-manager window for it
+          // is what the reader sees as "it opened twice". Keyed by vault root as well, so a
+          // vault switch cannot make one click dedupe against the other vault's reveal.
+          const now = Date.now()
+          if (lastReveal.root === root && lastReveal.path === relativePath && now - lastReveal.at < REVEAL_SETTLE_MS) {
+            sendJson(res, 200, {
+              revealed: true,
+              deduped: true,
+              path: toVaultPath(root, absolute),
+              folder: toVaultPath(root, shownFolder),
+              via: 'deduped',
+            })
+            return
+          }
+          lastReveal = { root, path: relativePath, at: now }
+          const subprocess = ctx.get('subprocess')
+          if (subprocess === undefined) throw new Error('dsh-obsidian: subprocess service is unavailable')
+          let argv
+          let via
+          if (process.platform === 'win32') {
+            // See `revealScript`: a spawned `explorer /select` inherits a hidden show-state,
+            // so the window exists but is invisible. The running shell is asked instead.
+            const folder = shownFolder
+            const powershell = await subprocess.resolveExecutable('powershell.exe')
+            const encoded = Buffer.from(
+              revealScript(folder, isDirectory ? '' : basename(absolute)),
+              'utf16le',
+            ).toString('base64')
+            argv = [powershell, '-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', encoded]
+            via = 'shell-com'
+          } else {
+            const command = revealCommand(process.platform, absolute, isDirectory)
+            const resolved = await subprocess.resolveExecutable(command.argv[0])
+            argv = [resolved, ...command.argv.slice(1)]
+            via = command.via
+          }
+          const handle = subprocess.spawn({
+            argv,
+            cwd: root,
+            stdio: { stdin: 'ignore', stdout: 'ignore', stderr: 'ignore' },
+            graceMs: 3000,
+          })
+          // A REJECTION is the one signal that the command never ran — answering 200 for
+          // that is how "nothing happened" stayed invisible. Exit codes mean nothing here
+          // (`explorer.exe` returns 1 even when it worked), so only a rejection fails.
+          const settled = await Promise.race([
+            handle.done.then(() => 'settled', () => 'failed'),
+            new Promise((resolve) => setTimeout(() => resolve('running'), 3000)),
+          ])
+          if (settled === 'failed') throw new Error('the file manager did not start')
+          sendJson(res, 200, {
+            revealed: true,
+            path: toVaultPath(root, absolute),
+            folder: toVaultPath(root, shownFolder),
+            via,
+          })
+        } catch (error) {
+          sendFailure(res, error, 400)
+        }
+      },
+    })
+
+    // Rename, create and trash are the only writes into the vault besides saving a note.
+    // Each one validates the path against the vault root, refuses an existing target, and
+    // reports the refusal by name — a silent no-op here loses a file.
+    http.webServer.register({
+      kind: 'exact',
+      path: ROUTE_RENAME,
+      handler: async (req, res) => {
+        try {
+          if (!allowMethod(req, res)) return
+          if (req.method !== 'POST') throw new Error('POST is required')
+          const root = vaultRoot()
+          if (root === undefined) throw new Error('no Obsidian vault resolved')
+          const body = await readJsonBody(req)
+          const path = typeof body.path === 'string' ? body.path : ''
+          const renamed = renameNote(root, path, body.name)
+          linkIndexMemo = null
+          sendJson(res, 200, { renamed: true, ...renamed })
+        } catch (error) {
+          sendFailure(res, error, 400)
+        }
+      },
+    })
+
+    http.webServer.register({
+      kind: 'exact',
+      path: ROUTE_CREATE,
+      handler: async (req, res) => {
+        try {
+          if (!allowMethod(req, res)) return
+          if (req.method !== 'POST') throw new Error('POST is required')
+          const root = vaultRoot()
+          if (root === undefined) throw new Error('no Obsidian vault resolved')
+          const body = await readJsonBody(req)
+          const created = createNote(
+            root,
+            typeof body.dir === 'string' ? body.dir : '',
+            body.name,
+            typeof body.text === 'string' ? body.text : undefined,
+          )
+          linkIndexMemo = null
+          sendJson(res, 201, { created: true, ...created })
+        } catch (error) {
+          sendFailure(res, error, 400)
+        }
+      },
+    })
+
+    http.webServer.register({
+      kind: 'exact',
+      path: ROUTE_TRASH,
+      handler: async (req, res) => {
+        try {
+          if (!allowMethod(req, res)) return
+          if (req.method !== 'POST') throw new Error('POST is required')
+          const root = vaultRoot()
+          if (root === undefined) throw new Error('no Obsidian vault resolved')
+          const body = await readJsonBody(req)
+          const path = typeof body.path === 'string' ? body.path : ''
+          const trashed = trashNote(root, path)
+          linkIndexMemo = null
+          sendJson(res, 200, { trashed: true, ...trashed })
         } catch (error) {
           sendFailure(res, error, 400)
         }

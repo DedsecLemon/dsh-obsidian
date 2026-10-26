@@ -233,6 +233,37 @@ exact mechanism a drag-and-drop would produce. The mention is ABSOLUTE
 vault: a relative mention would resolve against the wrong root. The controls live
 next to the selected note in the tree and in the note page's header.
 
+## The tree's context menu
+
+Right-clicking a row in the tree — or the `⋯` button that appears on hover, because a
+right-click is undiscoverable — toggles one menu, and a second click on the same row closes
+it again. It carries the actions that otherwise need the note to be selected first:
+
+- **open / edit** — `编辑` opens the note *and* puts it in edit mode, through a
+  `pendingEdit` hand-off keyed by vault path (the same trick `pendingAnchors` uses for
+  headings, and for the same reason: the page that has to act is a different component).
+- **hand off** — `引用到对话` inserts the `@path` mention into the conversation. One
+  handoff, deliberately: a second "paste the body instead" item sounded useful and read as
+  duplication in use, so it is gone rather than merely defaulted away.
+- **copy** — `[[名称]]`, the one copy that is not busywork: it is how a link gets built in
+  another note. The vault path, the `@absolute` mention and the filesystem path all served
+  scripts and terminals, not a reader in a sidebar.
+- **graph** — `查看关联` opens the note and jumps to its edges.
+- **open elsewhere** — in Obsidian, or reveal the file in the OS file manager. On Windows
+  that goes through the running shell (COM) rather than `explorer /select`: a spawned
+  `explorer` inherits the caller's hidden show-state, so the window was created, the file
+  was selected, and the window was invisible — the reader saw nothing at all.
+- **rename / trash / new note** — below.
+
+**Write operations are deliberately conservative.** `移到 .trash` never deletes: it moves
+the file to `<vault>/.trash/<timestamp>-<name>`, outside everything the panel lists, so a
+mistake is one move back. `重命名` only renames inside the same folder and **does not
+rewrite other notes' `[[links]]`** — the broken-link styling then shows exactly which
+links now miss, which is more honest than a silent rewrite sweep. `新建笔记` creates a
+single file with a minimal frontmatter. All three share one shape: resolve the path against
+the vault root, refuse a target that already exists, refuse a name Windows would rewrite
+(`甲.`) or cannot create (`NUL`), and name the failure instead of swallowing it.
+
 ## The note page
 
 A note opens in its own tab, not inline: full-height rendered Markdown with its

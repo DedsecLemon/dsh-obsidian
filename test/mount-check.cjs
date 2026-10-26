@@ -158,7 +158,16 @@ global.fetch = (url, options) => {
     posts.push({ url: target, body: parsed })
   }
   let body
-  if (target.startsWith('/dsh-obsidian/tree')) {
+  // The menu's write routes must be matched BEFORE `/note`, whose prefix they share.
+  if (target.startsWith('/dsh-obsidian/note/create')) {
+    body = { created: true, path: '新笔记.md' }
+  } else if (target.startsWith('/dsh-obsidian/note/trash')) {
+    body = { trashed: true, from: 'README.md', to: '.trash/20260101-000000-README.md' }
+  } else if (target.startsWith('/dsh-obsidian/rename')) {
+    body = { renamed: true, from: 'README.md', to: '改名后.md' }
+  } else if (target.startsWith('/dsh-obsidian/reveal')) {
+    body = { revealed: true, path: 'README.md', via: 'explorer' }
+  } else if (target.startsWith('/dsh-obsidian/tree')) {
     const query = target.indexOf('?path=') >= 0 ? decodeURIComponent(target.slice(target.indexOf('?path=') + 6)) : ''
     if (query !== '' && query === failTreePath) return Promise.resolve(respond({ error: 'boom-dir' }))
     body = { vault: '知识库', root: 'D:\\知识库', path: query, truncated: treeTruncated, entries: TREE[query] ?? [] }
@@ -601,6 +610,156 @@ step('a note shows its properties, its edges and which of its links are broken',
   }
 
   graphRoot.unmount()
+  container.remove()
+})
+
+step('a tree row opens its context menu, and the menu acts on that row', async () => {
+  // The search step before this one left a query in place, and a live query replaces the
+  // tree with its results. Clearing it restores the rows this step needs.
+  const searchInput = host.querySelector('input')
+  if (searchInput !== null) {
+    Simulate.change(searchInput, { target: { value: '' } })
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    await flush()
+  }
+  const row = host.querySelector('[title="笔记/知识索引.md"]')
+  if (row === null) throw new Error('no tree row to right-click')
+
+  row.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true }))
+  await flush()
+  const menu = host.querySelector('[data-dsh-obsidian-menu]')
+  if (menu === null) throw new Error('right-click did not open the menu')
+  const labels = [...menu.querySelectorAll('[role="menuitem"]')].map((button) => button.textContent || '')
+  // The menu is deliberately short: one handoff, one copy, then the file actions.
+  if (!labels.some((label) => label.includes('引用到对话'))) throw new Error('the attach action is missing: ' + labels.join(' | '))
+  if (!labels.some((label) => label.includes('复制 [['))) throw new Error('the copy-link action is missing: ' + labels.join(' | '))
+  if (labels.some((label) => label.includes('把正文插入对话'))) throw new Error('the body-insert action came back: ' + labels.join(' | '))
+  if (labels.filter((label) => label.includes('复制')).length !== 1) throw new Error('the copy group is not one item: ' + labels.join(' | '))
+  if (!labels.some((label) => label.includes('移到 .trash'))) throw new Error('the trash action is missing: ' + labels.join(' | '))
+
+  // Click again closes. A second right-click on the SAME row toggles it shut instead of
+  // reopening it (that is what makes a menu feel stuck).
+  row.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true }))
+  await flush()
+  if (host.querySelector('[data-dsh-obsidian-menu]') !== null) throw new Error('right-click did not toggle the menu shut')
+  row.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true }))
+  await flush()
+  if (host.querySelector('[data-dsh-obsidian-menu]') === null) throw new Error('right-click did not reopen the menu')
+  document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+  await flush()
+  if (host.querySelector('[data-dsh-obsidian-menu]') !== null) throw new Error('Escape did not close the menu')
+
+  // The hover button opens the SAME menu, and clicking it twice closes it.
+  row.dispatchEvent(new window.MouseEvent('mouseover', { bubbles: true }))
+  await flush()
+  const more = [...row.querySelectorAll('button')]
+    .find((button) => (button.getAttribute('aria-label') || '') === '更多操作')
+  if (more === undefined) throw new Error('the hover button did not appear')
+  more.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  await flush()
+  if (host.querySelector('[data-dsh-obsidian-menu]') === null) throw new Error('the hover button did not open the menu')
+  more.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  await flush()
+  if (host.querySelector('[data-dsh-obsidian-menu]') !== null) throw new Error('the second click did not close the menu')
+
+  // `引用到对话` is the one handoff, and it inserts an @mention (not the note's text).
+  row.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true }))
+  await flush()
+  inserted.length = 0
+  const attach = [...host.querySelectorAll('[role="menuitem"]')]
+    .find((button) => (button.textContent || '').includes('引用到对话'))
+  if (attach === undefined) throw new Error('no attach item')
+  attach.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  await flush(20)
+  if (inserted.length !== 1) throw new Error('insertText ran ' + inserted.length + ' time(s)')
+  if (!String(inserted[0]).includes('@D:')) throw new Error('the attach action did not insert a mention: ' + String(inserted[0]).slice(0, 40))
+
+  // `重命名…` asks first, then calls the host and re-reads that folder.
+  row.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true }))
+  await flush()
+  const rename = [...host.querySelectorAll('[role="menuitem"]')]
+    .find((button) => (button.textContent || '').includes('重命名'))
+  if (rename === undefined) throw new Error('no rename item')
+  rename.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  await flush()
+  const prompt = host.querySelector('[data-dsh-obsidian-prompt="rename"]')
+  if (prompt === null) throw new Error('the rename dialog did not open')
+  const input = prompt.querySelector('input')
+  if (input === null) throw new Error('the rename dialog has no input')
+  Simulate.change(input, { target: { value: '改名后' } })
+  await flush()
+  const confirm = [...prompt.querySelectorAll('button')].find((button) => (button.textContent || '') === '确定')
+  if (confirm === undefined) throw new Error('the rename dialog has no confirm button')
+  posts.length = 0
+  confirm.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  await flush(20)
+  const renamePost = posts.find((entry) => entry.url.startsWith('/dsh-obsidian/rename'))
+  if (renamePost === undefined) throw new Error('no rename request: ' + JSON.stringify(posts.map((p) => p.url)))
+  if (renamePost.body.name !== '改名后') throw new Error('the rename request carried the wrong name: ' + JSON.stringify(renamePost.body))
+  if (host.querySelector('[data-dsh-obsidian-prompt]') !== null) throw new Error('the dialog stayed open after confirming')
+
+  // Enter answers the DIALOG, not just the input: the container handles the key, so a
+  // reader who clicked the message can still submit.
+  row.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true }))
+  await flush()
+  const renameAgain = [...host.querySelectorAll('[role="menuitem"]')]
+    .find((button) => (button.textContent || '').includes('重命名'))
+  renameAgain.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  await flush()
+  const dialog = host.querySelector('[data-dsh-obsidian-prompt="rename"]')
+  if (dialog === null) throw new Error('the rename dialog did not reopen')
+  posts.length = 0
+  dialog.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+  await flush(20)
+  if (!posts.some((entry) => entry.url.startsWith('/dsh-obsidian/rename'))) {
+    throw new Error('Enter on the dialog did not submit: ' + JSON.stringify(posts.map((p) => p.url)))
+  }
+
+  // The one-action window is per ROW: acting on a second row inside the same 800 ms must
+  // still run, or the guard would eat a legitimate second action.
+  posts.length = 0
+  row.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true }))
+  await flush()
+  const revealA = [...host.querySelectorAll('[role="menuitem"]')]
+    .find((button) => (button.textContent || '').includes('在文件管理器中显示'))
+  revealA.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  await flush(10)
+  const otherRow = host.querySelector('[title="README.md"]')
+  if (otherRow === null) throw new Error('no second row to act on')
+  otherRow.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true }))
+  await flush()
+  const revealB = [...host.querySelectorAll('[role="menuitem"]')]
+    .find((button) => (button.textContent || '').includes('在文件管理器中显示'))
+  revealB.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  await flush(20)
+  const reveals = posts.filter((entry) => entry.url.startsWith('/dsh-obsidian/reveal'))
+  if (reveals.length !== 2) throw new Error('the per-row dedupe swallowed a second row: ' + reveals.length)
+})
+
+step('the tree menu can open a note directly in edit mode', async () => {
+  const row = host.querySelector('[title="README.md"]')
+  if (row === null) throw new Error('no row for README.md')
+  row.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true }))
+  await flush()
+  const edit = [...host.querySelectorAll('[role="menuitem"]')]
+    .find((button) => (button.textContent || '').trim() === '编辑')
+  if (edit === undefined) throw new Error('no edit item')
+  edit.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  await flush()
+
+  // The page that opens is a different tab instance, so the request travels through
+  // `pendingEdit`; mounting its body here is what a reader's click would do.
+  const noteBody = registered.find((entry) => entry.metadata.key === api.__internals.NOTE_TAB_ID)
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const editRoot = ReactDOMClient.createRoot(container)
+  editRoot.render(React.createElement(noteBody.component, {
+    useTabInfo: () => ({ tab: { contentId: api.__internals.noteAddress('README.md') } }),
+    inputActions: seatProps.inputActions,
+  }))
+  await flush()
+  if (container.querySelector('textarea') === null) throw new Error('the note did not open in edit mode')
+  editRoot.unmount()
   container.remove()
 })
 

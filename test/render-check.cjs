@@ -782,6 +782,50 @@ if (/<mark[^>]*>=/.test(bannerHtml)) throw new Error('a marker run leaked into t
 const bareRun = renderToStaticMarkup(React.createElement('div', null, api.__internals.renderMarkdown('==========\n')))
 if (bareRun.includes('<mark')) throw new Error('a bare ==== run became a highlight')
 
+// ── the tree menu and its dialog ───────────────────────────────────────────
+// The menu is the panel's action surface: an item that silently disappears takes a
+// capability with it, so the composition is pinned.
+const menuItems = [
+  { id: 'open', label: '打开', run: () => {} },
+  { id: 'edit', label: '编辑', run: () => {} },
+  { separator: true },
+  { id: 'body', label: '把正文插入对话', run: () => {} },
+  { id: 'disabled', label: '这一项不可用', disabled: true, run: () => {} },
+  { id: 'trash', label: '移到 .trash…', danger: true, run: () => {} },
+]
+const menuHtml = renderToStaticMarkup(React.createElement(api.__internals.VaultContextMenu, {
+  state: { x: 20, y: 30, node: { type: 'file', path: 'a.md', name: 'a.md' } },
+  items: menuItems,
+  onClose: () => {},
+  onRun: () => {},
+}))
+if (!menuHtml.includes('role="menu"')) throw new Error('the tree menu is not a menu role')
+if ((menuHtml.match(/role="menuitem"/g) ?? []).length !== 5) throw new Error('the tree menu lost an item')
+if (!menuHtml.includes('把正文插入对话')) throw new Error('the tree menu lost the insert-body action')
+if (!menuHtml.includes('data-dsh-obsidian-menu="file"')) throw new Error('the menu does not name its node type')
+if (!/disabled=""[^>]*>/.test(menuHtml) && !menuHtml.includes('disabled')) throw new Error('a disabled item is not disabled')
+const closedMenu = renderToStaticMarkup(React.createElement(api.__internals.VaultContextMenu, {
+  state: null, items: menuItems, onClose: () => {}, onRun: () => {},
+}))
+if (closedMenu !== '') throw new Error('a closed menu still rendered something')
+
+const renamePrompt = renderToStaticMarkup(React.createElement(api.__internals.VaultPrompt, {
+  prompt: { kind: 'rename', node: { name: '旧名.md', path: '旧名.md' }, initial: '旧名' },
+  onCancel: () => {},
+  onSubmit: () => {},
+}))
+if (!renamePrompt.includes('data-dsh-obsidian-prompt="rename"')) throw new Error('the rename dialog is not marked')
+if (!renamePrompt.includes('value="旧名"')) throw new Error('the rename dialog did not prefill the name')
+if (!renamePrompt.includes('取消') || !renamePrompt.includes('确定')) throw new Error('the rename dialog lost a button')
+const trashPrompt = renderToStaticMarkup(React.createElement(api.__internals.VaultPrompt, {
+  prompt: { kind: 'trash', node: { name: '甲.md', path: '甲.md' } },
+  onCancel: () => {},
+  onSubmit: () => {},
+}))
+if (!trashPrompt.includes('.trash')) throw new Error('the trash dialog does not say where the file goes')
+if (trashPrompt.includes('<input')) throw new Error('the trash dialog asks for text it does not need')
+if (!trashPrompt.includes('移入 .trash')) throw new Error('the trash confirm is not explicit')
+
 // ── report ─────────────────────────────────────────────────────────────────
 console.log('client.js harness OK')
 console.log('  tab type   :', tabType.kind, '-> id', tabType.id, 'title', JSON.stringify(tabType.title('')))
