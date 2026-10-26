@@ -770,6 +770,18 @@ if (!orderHtml.includes('<code')) throw new Error('the code span next to a lone 
 if (!orderHtml.includes('>真高亮</mark>')) throw new Error('the real highlight after a code span did not render')
 if (/<mark[^>]*>[^<]*代码/.test(orderHtml)) throw new Error('the code span ended up inside a highlight')
 
+// This vault writes its banners with FIVE and SIX equals — strict Obsidian would not
+// highlight those at all, and a strict `==` rule is what made the reader report
+// "nothing changed". `={2,}` on both sides is a deliberate deviation.
+const bannerHtml = renderToStaticMarkup(React.createElement('div', null,
+  api.__internals.renderMarkdown('===== 一、核心功能模式 =====\n\n======本书仅供试看=======\n')))
+if (!bannerHtml.includes('> 一、核心功能模式 </mark>')) throw new Error('a five-equals banner did not highlight')
+if (!bannerHtml.includes('>本书仅供试看</mark>')) throw new Error('a six-equals banner did not highlight')
+if (/<mark[^>]*>=/.test(bannerHtml)) throw new Error('a marker run leaked into the highlighted text')
+// A bare run of equals has no content between the markers, so it is not a highlight.
+const bareRun = renderToStaticMarkup(React.createElement('div', null, api.__internals.renderMarkdown('==========\n')))
+if (bareRun.includes('<mark')) throw new Error('a bare ==== run became a highlight')
+
 // ── report ─────────────────────────────────────────────────────────────────
 console.log('client.js harness OK')
 console.log('  tab type   :', tabType.kind, '-> id', tabType.id, 'title', JSON.stringify(tabType.title('')))

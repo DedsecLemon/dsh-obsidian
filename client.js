@@ -788,12 +788,20 @@ window.__ModuleLoader__.load({
 
 		// ── markdown-lite ────────────────────────────────────────────────────
 
-		// `==高亮==` is Obsidian's highlight mark. Two bounds are load-bearing:
-		// `[^=`]` stops a `====` run (and an empty mark) matching, and `[^`]` stops a
-		// single comparison marker (`a == b`) from pairing with a LATER `==` and
-		// swallowing the code span between them. Spaces are allowed inside because this
-		// vault writes `== 标题 ==` as well as `==句子==`.
-		const INLINE = /(\[\[[^\]\n|]{1,200}(?:\|[^\]\n]{1,200})?\]\])|(`[^`\n]+`)|(==[^=`\n]{1,400}==)|(\*\*[^*\n]+\*\*)|(~~[^~\n]+~~)|(\*[^*\n]+\*)|(\[[^\]\n]*\]\([^)\s]+\))/g;
+		// `==高亮==` is Obsidian's highlight mark. Three bounds are load-bearing:
+		//
+		// - `={2,}` rather than `==` on BOTH sides: this vault writes its banners as
+		//   `===== 一、核心功能模式 =====` (five equals) and `======…======` (six), which
+		//   strict Obsidian does not highlight at all. Accepting a run of two or more is a
+		//   deliberate deviation — the reader asked for the colour they expected, and the
+		//   alternative is telling them their own notes are misspelled.
+		// - `[^=`]` in the body stops a bare `====` rule, an empty mark, and a nested run
+		//   from matching.
+		// - `[^`]` stops a lone comparison marker (`a == b`) from pairing with a LATER
+		//   `==` and swallowing the code span between them.
+		//
+		// Spaces are allowed inside; the markers themselves are stripped when rendering.
+		const INLINE = /(\[\[[^\]\n|]{1,200}(?:\|[^\]\n]{1,200})?\]\])|(`[^`\n]+`)|(={2,}[^=`\n]{1,400}={2,})|(\*\*[^*\n]+\*\*)|(~~[^~\n]+~~)|(\*[^*\n]+\*)|(\[[^\]\n]*\]\([^)\s]+\))/g;
 
 		/**
 		 * GitHub-flavoured heading slug — how some converted notes spell `[x](#锚点)`.
@@ -1149,9 +1157,11 @@ window.__ModuleLoader__.load({
 							padding: '0.15em 0.3em',
 						},
 					}, token.slice(1, -1)));
-				} else if (token.slice(0, 2) === '==') {
+				} else if (token.charAt(0) === '=' && token.length > 2) {
 					// Obsidian's highlight is a `<mark>`: same element, same default
-					// `--text-highlight-bg` (a 40% amber), so it reads the same here.
+					// `--text-highlight-bg` (a 40% amber), so it reads the same here. The
+					// marker RUNS are stripped rather than sliced by two, because this vault
+					// writes `===== 标题 =====` as well as `==句子==`.
 					nodes.push(h('mark', {
 						key,
 						'data-dsh-obsidian-highlight': '',
@@ -1161,7 +1171,7 @@ window.__ModuleLoader__.load({
 							borderRadius: 2,
 							padding: '0.05em 0.1em',
 						},
-					}, token.slice(2, -2)));
+					}, token.replace(/^=+/, '').replace(/=+$/, '')));
 				} else if (token.slice(0, 2) === '**') {
 					nodes.push(h('strong', { key, style: { fontWeight: 600 } }, token.slice(2, -2)));
 				} else if (token.slice(0, 2) === '~~') {
@@ -3627,7 +3637,16 @@ window.__ModuleLoader__.load({
 		 * nothing the author can read. `apply` posts this to the host, which stores it
 		 * somewhere it can be inspected without a browser console.
 		 */
-		const registrationReport = { ok: [], failed: [] };
+		/**
+		 * Which client build the page actually loaded.
+		 *
+		 * `GET /dsh-obsidian/diag` reads back what the browser posted, so "is the page
+		 * running the bundle I just installed?" is answerable without a console — it is
+		 * the first question after any "I still see the old behaviour" report.
+		 */
+		const CLIENT_BUILD = '1.5.2';
+
+		const registrationReport = { build: CLIENT_BUILD, ok: [], failed: [] };
 
 		function guard(label, run) {
 			try {
