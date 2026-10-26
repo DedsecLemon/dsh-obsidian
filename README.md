@@ -259,6 +259,32 @@ as a courtesy, because this vault's sandplay notes are written that way
 than guessed. `[[笔记#^block-id]]` lands on a block: a trailing `^id` on a paragraph or
 list item becomes `data-block-id` and never appears as text.
 
+**Properties are shown, not dropped.** Frontmatter used to be discarded as "metadata,
+not prose" — true of a document, wrong for a sidebar reader, where what a note *is*
+(`type`, `status`, `parent`) and how it is filed (`tags`) is the first thing you want.
+The note page renders it as a collapsible properties card in file order: lists become
+chips, booleans tick, dates and numbers read as themselves, and a value that is a
+`[[link]]` stays clickable. The renderer and the card both read the block through one
+`parseProperties`, so the two can never disagree about where the body starts.
+
+**The graph, locally.** Below the note are its edges: `引用本文` (which notes link *here*,
+with the line that does it) and `本文引用` (what this note links to, broken targets
+marked). Clicking a row opens that note as its own page. This is a deliberate choice
+over a whole-vault graph, which a narrow sidebar cannot show usefully — what a reader
+needs is the edge they are standing on.
+
+Both read one index: `GET /dsh-obsidian/links` walks the vault once and returns every
+note's title, excerpt, tags and where its `[[links]]` land. On this vault that is 714
+notes and ~1080 links in ~0.5 s and ~290 KB, cached for 15 s (`?refresh=1` rebuilds,
+which is what the panel's `刷新` does). It is bounded like the search — file/byte/depth
+caps and a `truncated` flag — because the index is a full read of the vault.
+
+**Link states.** A `[[link]]` to a note that does not resolve is drawn the way Obsidian
+draws a broken link: muted, dashed underline, and a title that says so — a dense table of
+contents is otherwise all one colour whether or not half of it is broken. Hovering a link
+shows a card with its title and the first line of the target; a target that does not exist
+says that instead of showing an empty card.
+
 **The typography is Obsidian's, transcribed.** The numbers in `READ` are the
 default theme's own reading-view values — 16px at line-height 1.5, the heading
 ladder (`1.618em`/`1.462em`/`1.318em`/`1.188em`/`1.076em`/`1em`) with its weights

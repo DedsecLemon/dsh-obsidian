@@ -43,6 +43,7 @@ window.__ModuleLoader__.load({
 			resolve: '/dsh-obsidian/resolve-link',
 			vault: '/dsh-obsidian/vault',
 			diag: '/dsh-obsidian/diag',
+			links: '/dsh-obsidian/links',
 		};
 
 		// ── the vault conversation ───────────────────────────────────────────
@@ -869,6 +870,163 @@ window.__ModuleLoader__.load({
 			return { text: String(text).slice(0, match.index), blockId: match[1] };
 		}
 
+		// ── the vault index: backlinks, link status, hover previews ──────────
+		//
+		// One request carries the whole graph: every note's title, excerpt, tags, and
+		// where its `[[links]]` land. Backlinks are edges the open note never writes,
+		// so they can only come from a vault-wide read. ~700 notes / ~290 KB is one
+		// round trip that beats a request per link, and the host caches it as well.
+
+		/** Shared by every note page: the index is vault-wide, not per page. */
+		const vaultIndex = { at: 0, data: null, pending: null, error: '' };
+
+		/**
+		 * Fetch (or reuse) the vault index.
+		 * @param force - bypass the cache; used by the backlinks refresh button.
+		 * @returns a promise of the index, resolving to null when it could not be read.
+		 */
+		function loadVaultIndex(force) {
+			const now = Date.now();
+			if (!force && vaultIndex.data !== null && now - vaultIndex.at < 15000) {
+				return Promise.resolve(vaultIndex.data);
+			}
+			if (!force && vaultIndex.pending !== null) return vaultIndex.pending;
+			vaultIndex.pending = getJson(API.links + (force === true ? '?refresh=1' : ''))
+				.then((data) => {
+					vaultIndex.data = data;
+					vaultIndex.at = Date.now();
+					vaultIndex.error = '';
+					vaultIndex.pending = null;
+					return data;
+				})
+				.catch((error) => {
+					vaultIndex.pending = null;
+					// The page still works without backlinks; the panel says why they are empty.
+					vaultIndex.error = String(error && error.message ? error.message : error);
+					return vaultIndex.data;
+				});
+			return vaultIndex.pending;
+		}
+
+		/** The notes that link here, with the line that did it. Derived, not stored. */
+		function backlinksOf(index, path) {
+			const rows = [];
+			if (index === null || index === undefined || index.notes === undefined || path === undefined) return rows;
+			for (const source of Object.keys(index.notes)) {
+				if (source === path) continue;
+				const entry = index.notes[source];
+				for (const link of entry.links) {
+					if (link.resolved !== path) continue;
+					rows.push({
+						path: source,
+						title: entry.title,
+						line: link.line === '' ? entry.excerpt : link.line,
+						anchor: link.anchor,
+					});
+					break;
+				}
+			}
+			rows.sort((a, b) => a.path.localeCompare(b.path));
+			return rows;
+		}
+
+		/** The open note's own links, with the target's title for the panel. */
+		function outlinksOf(index, path) {
+			const entry = index === null || index === undefined || index.notes === undefined ? undefined : index.notes[path];
+			if (entry === undefined) return [];
+			return entry.links.map((link) => ({
+				target: link.target,
+				anchor: link.anchor,
+				line: link.line,
+				resolved: link.resolved,
+				title: link.resolved !== null && index.notes[link.resolved] !== undefined
+					? index.notes[link.resolved].title
+					: link.target,
+			}));
+		}
+
+		/**
+		 * Whether one of this note's links points at something that exists.
+		 * `known: false` means the index has no opinion (a link in a part of the note
+		 * it did not index), so the renderer must not mark it broken.
+		 */
+		function linkStatus(index, path, target) {
+			const entry = index === null || index === undefined || index.notes === undefined ? undefined : index.notes[path];
+			if (entry === undefined) return { known: false, missing: false };
+			const wanted = String(target).toLowerCase();
+			for (const link of entry.links) {
+				if (link.target.toLowerCase() === wanted) return { known: true, missing: link.resolved === null };
+			}
+			return { known: false, missing: false };
+		}
+
+		/** The hover card's content for a link target: where it lands and how it starts. */
+		function previewOf(index, target) {
+			if (index === null || index === undefined || index.notes === undefined) return null;
+			const wanted = String(target).toLowerCase().replace(/\.md$/, '');
+			for (const path of Object.keys(index.notes)) {
+				const entry = index.notes[path];
+				const bare = path.toLowerCase().replace(/\.md$/, '');
+				if (bare === wanted || bare.split('/').pop() === wanted || String(entry.title).toLowerCase() === wanted) {
+					return { path, title: entry.title, excerpt: entry.excerpt, tags: entry.tags };
+				}
+			}
+			return null;
+		}
+
+		// ── note properties (YAML frontmatter) ───────────────────────────────
+		//
+		// The renderer drops frontmatter on purpose — "metadata, not prose". In a
+		// sidebar reader the opposite is true: title, aliases, tags and dates are the
+		// first thing worth seeing. Obsidian shows them as a properties table, and so
+		// does this: same rows, same order, one collapsible card.
+
+		/**
+		 * Parse a note's frontmatter into property rows.
+		 * @returns `{ rows, body }` — rows are `{ key, kind, value }` in file order;
+		 *   `body` is the note without the block.
+		 */
+		function parseProperties(text) {
+			const source = String(text === undefined || text === null ? '' : text);
+			const match = /^(?:\uFEFF)?---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(source);
+			if (match === null) return { rows: [], body: source };
+			const rows = [];
+			let current = null;
+			for (const line of match[1].split(/\r?\n/)) {
+				if (line.trim() === '' || /^\s*#/.test(line)) continue;
+				const item = /^\s*-\s+(.*)$/.exec(line);
+				if (item !== null && current !== null) {
+					if (!Array.isArray(current.value)) {
+						// A scalar followed by a block list: keep both readings.
+						current.value = current.value === '' ? [] : [String(current.value)];
+					}
+					current.value.push(item[1].trim().replace(/^["']|["']$/g, ''));
+					current.kind = 'list';
+					continue;
+				}
+				const pair = /^([A-Za-z0-9_\u4e00-\u9fa5-]+)\s*:\s*(.*)$/.exec(line);
+				if (pair === null) continue;
+				const raw = pair[2].trim();
+				const inline = /^\[(.*)\]$/.exec(raw);
+				// `key:` with nothing after it starts a block list; `key: []` is an empty one.
+				const value = raw === '' || (inline !== null && inline[1].trim() === '')
+					? []
+					: (inline !== null
+						? inline[1].split(',').map((part) => part.trim().replace(/^["']|["']$/g, '')).filter((part) => part !== '')
+						: raw.replace(/^["']|["']$/g, ''));
+				current = { key: pair[1], kind: raw === '' || inline !== null ? 'list' : 'text', value };
+				rows.push(current);
+			}
+			for (const row of rows) {
+				if (row.kind === 'list') continue;
+				const value = String(row.value).trim();
+				if (value === 'true' || value === 'false') row.kind = 'boolean';
+				else if (/^-?\d+(\.\d+)?$/.test(value)) row.kind = 'number';
+				else if (/^\d{4}-\d{2}-\d{2}$/.test(value)) row.kind = 'date';
+			}
+			return { rows, body: source.slice(match[0].length) };
+		}
+
 		/**
 		 * Render one line of inline Markdown.
 		 *
@@ -877,9 +1035,21 @@ window.__ModuleLoader__.load({
 		 * @param onLink - navigator for `[[wikilinks]]` (opens another note).
 		 * @param onAnchor - navigator for a heading in THIS note: `[[#标题]]`, `[x](#锚点)`.
 		 *   Without it, an anchor renders as a dashed span rather than a dead button.
+		 * @param hints - optional link intelligence: `statusOf(target)` says whether a
+		 *   target exists, `preview(target, event)` / `hidePreview()` drive the hover card.
+		 *   Without it every link renders as it did before — neutral, no preview.
 		 */
-		function renderInline(text, prefix, onLink, onAnchor) {
+		function renderInline(text, prefix, onLink, onAnchor, hints) {
 			const nodes = [];
+			const statusOf = hints !== undefined && typeof hints.statusOf === 'function'
+				? hints.statusOf
+				: () => ({ known: false, missing: false });
+			const hoverable = hints !== undefined && typeof hints.preview === 'function'
+				? (target) => ({
+					onMouseEnter: (event) => hints.preview(target, event),
+					onMouseLeave: () => { if (typeof hints.hidePreview === 'function') hints.hidePreview(); },
+				})
+				: () => ({});
 			const linkButtonStyle = {
 				color: T.brand,
 				background: 'transparent',
@@ -930,16 +1100,29 @@ window.__ModuleLoader__.load({
 					} else if (anchor === null && typeof onLink === 'function' && noteTarget !== '') {
 						// A link to another note, if a navigator is supplied: this is what
 						// makes the note page's `[[wikilink]]`s clickable.
+						const status = statusOf(noteTarget);
 						nodes.push(h('button', {
 							key,
 							type: 'button',
-							title: noteAnchor === '' ? '打开 ' + noteTarget : '打开 ' + noteTarget + ' 并跳到 ' + noteAnchor,
+							title: status.missing === true
+								? '笔记不存在：' + noteTarget
+								: (noteAnchor === '' ? '打开 ' + noteTarget : '打开 ' + noteTarget + ' 并跳到 ' + noteAnchor),
 							onClick: (event) => {
 								event.preventDefault();
 								event.stopPropagation();
 								onLink(noteTarget, noteAnchor === '' ? undefined : noteAnchor);
 							},
-							style: linkButtonStyle,
+							// Obsidian fades a link it cannot resolve. Without that, a table of
+							// contents is all one colour whether or not half of it is broken.
+							style: status.missing === true
+								? {
+									...linkButtonStyle,
+									color: T.labelSecondary,
+									textDecorationLine: 'underline',
+									textDecorationStyle: 'dashed',
+								}
+								: linkButtonStyle,
+							...hoverable(noteTarget),
 						}, label.trim()));
 					} else {
 						nodes.push(h('span', {
@@ -1197,17 +1380,16 @@ window.__ModuleLoader__.load({
 		 * @param text - the note's source.
 		 * @param onLink - navigator for `[[wikilinks]]`.
 		 * @param onAnchor - navigator for a heading in THIS note (`[[#标题]]`, `[x](#锚点)`).
+		 * @param hints - link status + hover preview, passed straight to `renderInline`.
 		 * @param idPrefix - anchor prefix for headings. Every heading carries its anchor
 		 *   and its depth as DOM attributes, so the outline panel reads what was
 		 *   actually rendered instead of parsing the note a second time.
 		 */
-		function renderMarkdown(text, onLink, idPrefix, onAnchor) {
-			let lines = String(text).split(/\r?\n/);
-			// Drop YAML frontmatter: it is metadata, not prose.
-			if (lines[0] === '---') {
-				const end = lines.indexOf('---', 1);
-				if (end > 0) lines = lines.slice(end + 1);
-			}
+		function renderMarkdown(text, onLink, idPrefix, onAnchor, hints) {
+			// Frontmatter is metadata, not prose — but it is not DISCARDED here: the
+			// note page renders it as a properties card above the body, and both sides
+			// read it through `parseProperties` so the two can never disagree.
+			let lines = parseProperties(text).body.replace(/\r\n?/g, '\n').split('\n');
 			if (lines.length > MAX_RENDER_LINES) lines = lines.slice(0, MAX_RENDER_LINES);
 
 			const blocks = [];
@@ -1286,8 +1468,8 @@ window.__ModuleLoader__.load({
 						// `<details open>` starts expanded; everything else starts folded.
 						defaultOpen: /\bopen\b/i.test(detailsHead[1]),
 						title: summary,
-						titleNodes: summary === '' ? null : renderInline(summary, 'dt' + key, onLink, onAnchor),
-						body: bodyText.trim() === '' ? null : renderMarkdown(bodyText, onLink, anchors + 'dt' + key + '-', onAnchor),
+						titleNodes: summary === '' ? null : renderInline(summary, 'dt' + key, onLink, onAnchor, hints),
+						body: bodyText.trim() === '' ? null : renderMarkdown(bodyText, onLink, anchors + 'dt' + key + '-', onAnchor, hints),
 					}));
 					continue;
 				}
@@ -1317,12 +1499,12 @@ window.__ModuleLoader__.load({
 						h('thead', { key: 'h' }, h('tr', null, header.map((cell, cellIndex) => h('th', {
 							key: cellIndex,
 							style: { ...cellStyle, textAlign: 'left', fontWeight: 600, background: T.bgLayer1 },
-						}, renderInline(cell, 'th' + key + '-' + cellIndex, onLink, onAnchor))))),
+						}, renderInline(cell, 'th' + key + '-' + cellIndex, onLink, onAnchor, hints))))),
 						rows.length === 0 ? null : h('tbody', { key: 't' }, rows.map((row, rowIndex) => h('tr', { key: rowIndex },
 							row.map((cell, cellIndex) => h('td', {
 								key: cellIndex,
 								style: cellStyle,
-							}, renderInline(cell, 'td' + key + '-' + rowIndex + '-' + cellIndex, onLink, onAnchor)))))),
+							}, renderInline(cell, 'td' + key + '-' + rowIndex + '-' + cellIndex, onLink, onAnchor, hints)))))),
 					])));
 					continue;
 				}
@@ -1347,7 +1529,7 @@ window.__ModuleLoader__.load({
 							// Leave breathing room above the heading when the outline jumps here.
 							scrollMarginTop: 14,
 						},
-					}, renderInline(heading[2], 'h' + key, onLink, onAnchor)));
+					}, renderInline(heading[2], 'h' + key, onLink, onAnchor, hints)));
 					i += 1;
 					continue;
 				}
@@ -1383,9 +1565,9 @@ window.__ModuleLoader__.load({
 							foldable: callout.foldable,
 							defaultOpen: callout.defaultOpen,
 							title: callout.title,
-							titleNodes: renderInline(callout.title, 'ct' + key, onLink, onAnchor),
+							titleNodes: renderInline(callout.title, 'ct' + key, onLink, onAnchor, hints),
 							// Its own anchor prefix keeps ids unique against the outer note.
-							body: bodyText.trim() === '' ? null : renderMarkdown(bodyText, onLink, anchors + 'c' + key + '-', onAnchor),
+							body: bodyText.trim() === '' ? null : renderMarkdown(bodyText, onLink, anchors + 'c' + key + '-', onAnchor, hints),
 						}));
 						continue;
 					}
@@ -1398,7 +1580,7 @@ window.__ModuleLoader__.load({
 							color: 'inherit',
 							fontStyle: 'normal',
 						},
-					}, renderInline(quoted.join(' '), 'q' + key, onLink, onAnchor)));
+					}, renderInline(quoted.join(' '), 'q' + key, onLink, onAnchor, hints)));
 					continue;
 				}
 
@@ -1419,7 +1601,7 @@ window.__ModuleLoader__.load({
 							key: itemIndex,
 							...(marked.blockId === '' ? {} : { 'data-block-id': marked.blockId }),
 							style: { padding: READ.listPad + ' 0', lineHeight: READ.lineHeight },
-						}, renderInline(marked.text, 'li' + key + '-' + itemIndex, onLink, onAnchor));
+						}, renderInline(marked.text, 'li' + key + '-' + itemIndex, onLink, onAnchor, hints));
 					})));
 					continue;
 				}
@@ -1436,7 +1618,7 @@ window.__ModuleLoader__.load({
 					// not content, so it never reaches the page.
 					...(blockMarked.blockId === '' ? {} : { 'data-block-id': blockMarked.blockId }),
 					style: { margin: READ.block + ' 0', lineHeight: READ.lineHeight },
-				}, renderInline(blockMarked.text, 'p' + key, onLink, onAnchor)));
+				}, renderInline(blockMarked.text, 'p' + key, onLink, onAnchor, hints)));
 			}
 
 			return blocks;
@@ -1529,6 +1711,260 @@ window.__ModuleLoader__.load({
 						paddingTop: 2,
 					},
 				}, props.body),
+			]);
+		}
+
+		/**
+		 * The note's properties, the way Obsidian's reading view shows them.
+		 *
+		 * Frontmatter was dropped as "metadata, not prose" — true of a document, false
+		 * in a sidebar reader, where what a note IS (type, status, parent) and how it is
+		 * filed (tags) is the first thing worth seeing. Collapsible, because a reader who
+		 * came for the prose should not have to scroll past ten rows of filing.
+		 *
+		 * @param props - `rows` from `parseProperties`, `onLink` for `[[...]]` values,
+		 *   and the same `hints` the body uses (a property link can be broken too).
+		 */
+		function PropertiesCard(props) {
+			const [open, setOpen] = React.useState(true);
+			const rows = props.rows;
+			if (rows === undefined || rows.length === 0) return null;
+			const valueOf = (row) => {
+				if (row.kind === 'list') {
+					return row.value.map((item, index) => h('span', {
+						key: index,
+						style: {
+							display: 'inline-block',
+							margin: '0 4px 2px 0',
+							padding: '0 6px',
+							borderRadius: 4,
+							background: T.bgLayer2,
+							fontSize: 11.5,
+							lineHeight: '18px',
+						},
+					}, item));
+				}
+				if (row.kind === 'boolean') return row.value === 'true' ? '✓' : '✗';
+				// Text values keep their `[[links]]` clickable: `parent` is a link here.
+				return renderInline(String(row.value), 'prop-' + row.key, props.onLink, undefined, props.hints);
+			};
+			return h('div', {
+				'data-dsh-obsidian-properties': rows.length,
+				style: {
+					margin: '0 22px 10px',
+					padding: '6px 10px',
+					border: '1px solid ' + T.borderL1,
+					borderRadius: 6,
+					background: T.bgLayer1,
+					fontSize: 12,
+					lineHeight: 1.55,
+				},
+			}, [
+				h('button', {
+					key: 'head',
+					type: 'button',
+					onClick: () => setOpen((value) => !value),
+					style: {
+						display: 'block',
+						width: '100%',
+						textAlign: 'left',
+						border: 'none',
+						background: 'transparent',
+						color: T.labelSecondary,
+						font: 'inherit',
+						fontSize: 11.5,
+						letterSpacing: '0.02em',
+						padding: 0,
+						cursor: 'pointer',
+					},
+				}, (open ? '▾ ' : '▸ ') + '属性 · ' + rows.length),
+				open ? h('div', { key: 'rows', style: { marginTop: 4 } }, rows.map((row) => h('div', {
+					key: 'r-' + row.key,
+					style: { display: 'flex', gap: 10, padding: '1px 0', alignItems: 'baseline' },
+				}, [
+					h('span', {
+						key: 'k',
+						style: { flex: '0 0 32%', minWidth: 0, color: T.labelSecondary, overflowWrap: 'anywhere' },
+					}, row.key),
+					h('span', {
+						key: 'v',
+						style: { flex: '1 1 auto', minWidth: 0, overflowWrap: 'anywhere' },
+					}, valueOf(row)),
+				]))) : null,
+			]);
+		}
+
+		/**
+		 * The graph, locally: which notes link here, and what this note links to.
+		 *
+		 * A whole-vault graph was rejected in this plugin's design — a hairball in a
+		 * narrow sidebar tells nobody anything. The useful part is the edges touching
+		 * the note on screen, each with the line that makes it, which is exactly what
+		 * a backlinks pane is.
+		 *
+		 * @param props - `backlinks`, `outlinks`, `onOpen(path)`, `onRefresh()`.
+		 */
+		function RelatedPanel(props) {
+			const [open, setOpen] = React.useState(true);
+			const backlinks = props.backlinks;
+			const outlinks = props.outlinks;
+			if (backlinks.length === 0 && outlinks.length === 0) return null;
+			const row = (key, title, line, broken, onClick) => h('button', {
+				key,
+				type: 'button',
+				title: line,
+				onClick,
+				style: {
+					display: 'block',
+					width: '100%',
+					overflow: 'hidden',
+					textAlign: 'left',
+					border: 'none',
+					borderRadius: 4,
+					background: 'transparent',
+					color: 'inherit',
+					font: 'inherit',
+					fontSize: 12,
+					lineHeight: 1.45,
+					padding: '3px 6px',
+					cursor: 'pointer',
+				},
+			}, [
+				h('span', {
+					key: 't',
+					style: broken ? { color: T.labelSecondary } : { color: T.brand },
+				}, title),
+				line === '' ? null : h('span', {
+					key: 'l',
+					style: {
+						display: 'block',
+						color: T.labelSecondary,
+						fontSize: 11.5,
+						whiteSpace: 'nowrap',
+						overflow: 'hidden',
+						textOverflow: 'ellipsis',
+					},
+				}, line),
+			]);
+			const section = (key, label, rows, render) => (rows.length === 0 ? null : h('div', { key, style: { marginTop: 6 } }, [
+				h('div', {
+					key: 'h',
+					style: { color: T.labelSecondary, fontSize: 11.5, padding: '2px 6px' },
+				}, label + ' · ' + rows.length),
+				...rows.map(render),
+			]));
+			return h('div', {
+				'data-dsh-obsidian-related': backlinks.length + ':' + outlinks.length,
+				style: {
+					margin: '4px 22px 24px',
+					borderTop: '1px solid ' + T.borderL1,
+					paddingTop: 6,
+					fontSize: 12,
+				},
+			}, [
+				h('div', {
+					key: 'head',
+					style: { display: 'flex', alignItems: 'baseline', gap: 8 },
+				}, [
+					h('button', {
+						key: 't',
+						type: 'button',
+						onClick: () => setOpen((value) => !value),
+						style: {
+							textAlign: 'left',
+							border: 'none',
+							background: 'transparent',
+							color: T.labelSecondary,
+							font: 'inherit',
+							fontSize: 11.5,
+							padding: 0,
+							cursor: 'pointer',
+						},
+					}, (open ? '▾ ' : '▸ ') + '关联 · ' + (backlinks.length + outlinks.length)),
+					h('button', {
+						key: 'r',
+						type: 'button',
+						title: '重新扫描整个知识库',
+						onClick: () => { if (typeof props.onRefresh === 'function') props.onRefresh(); },
+						style: {
+							marginLeft: 'auto',
+							border: 'none',
+							background: 'transparent',
+							color: T.labelSecondary,
+							font: 'inherit',
+							fontSize: 11.5,
+							padding: 0,
+							cursor: 'pointer',
+							textDecoration: 'underline',
+						},
+					}, '刷新'),
+				]),
+				props.error === '' || props.error === undefined || props.error === null
+					? null
+					: h('div', {
+						key: 'err',
+						style: { color: T.error, fontSize: 11.5, padding: '2px 6px' },
+					}, '索引读取失败：' + props.error),
+				open ? section('back', '引用本文', backlinks, (item) => row(
+					'back-' + item.path,
+					item.title,
+					item.line,
+					false,
+					() => props.onOpen(item.path),
+				)) : null,
+				open ? section('out', '本文引用', outlinks, (item) => row(
+					'out-' + item.target,
+					item.title + (item.resolved === null ? '（不存在）' : ''),
+					item.line,
+					item.resolved === null,
+					() => { if (item.resolved !== null) props.onOpen(item.resolved); },
+				)) : null,
+			]);
+		}
+
+		/**
+		 * The hover card for a link: where it goes, and how the target starts.
+		 *
+		 * Positioned `fixed` at the pointer because the note body is its own scroll
+		 * container — an absolutely-positioned card would be clipped by it. Coordinates
+		 * are clamped so a link near the right edge still shows a whole card.
+		 *
+		 * @param props - `preview`: `{ title, excerpt, tags, missing, x, y }`, or null.
+		 */
+		function LinkPreview(props) {
+			const preview = props.preview;
+			if (preview === null || preview === undefined) return null;
+			const width = 280;
+			const viewWidth = typeof window === 'undefined' ? 0 : window.innerWidth;
+			const viewHeight = typeof window === 'undefined' ? 0 : window.innerHeight;
+			const left = Math.max(8, Math.min(preview.x + 14, viewWidth === 0 ? preview.x + 14 : viewWidth - width - 12));
+			const top = Math.max(8, Math.min(preview.y + 16, viewHeight === 0 ? preview.y + 16 : viewHeight - 150));
+			return h('div', {
+				'data-dsh-obsidian-preview': preview.missing === true ? 'missing' : 'note',
+				style: {
+					position: 'fixed',
+					left,
+					top,
+					width,
+					zIndex: 40,
+					padding: '8px 10px',
+					borderRadius: 6,
+					border: '1px solid ' + T.borderL2,
+					background: T.bgOverlay,
+					boxShadow: T.shadow,
+					fontSize: 12,
+					lineHeight: 1.5,
+					pointerEvents: 'none',
+				},
+			}, [
+				h('div', {
+					key: 't',
+					style: { fontWeight: 600, marginBottom: 4, overflowWrap: 'anywhere' },
+				}, preview.title),
+				h('div', {
+					key: 'x',
+					style: { color: preview.missing === true ? T.error : T.labelSecondary },
+				}, preview.missing === true ? '这篇笔记不存在' : preview.excerpt),
 			]);
 		}
 
@@ -2580,13 +3016,71 @@ window.__ModuleLoader__.load({
 
 				const name = path === undefined ? '' : String(path).split('/').pop();
 
+				// The vault index: backlinks, broken-link styling and hover previews all
+				// read this. It is vault-wide and fetched once per session (the host keeps
+				// its own 15 s memo), so navigating between notes costs nothing.
+				const [index, setIndex] = React.useState(vaultIndex.data);
+				const [indexError, setIndexError] = React.useState(vaultIndex.error);
+				const [preview, setPreview] = React.useState(null);
+				React.useEffect(() => {
+					let live = true;
+					loadVaultIndex(false).then((data) => {
+						if (!live) return;
+						if (data !== null) setIndex(data);
+						setIndexError(vaultIndex.error);
+					});
+					return () => { live = false; };
+				}, [path]);
+				const refreshIndex = React.useCallback(() => {
+					loadVaultIndex(true).then((data) => {
+						if (data !== null) setIndex(data);
+						setIndexError(vaultIndex.error);
+					});
+				}, []);
+
+				// The note's outgoing links are the authority on what exists: a link is
+				// broken only when THIS note's own entry says it did not resolve, so a
+				// partially built index can never paint half a table of contents grey.
+				const hints = React.useMemo(() => ({
+					statusOf: (target) => linkStatus(index, path, target),
+					preview: (target, event) => {
+						const found = previewOf(index, target);
+						const status = linkStatus(index, path, target);
+						const x = typeof event === 'undefined' || event === null ? 0 : Number(event.clientX) || 0;
+						const y = typeof event === 'undefined' || event === null ? 0 : Number(event.clientY) || 0;
+						if (found === null) {
+							setPreview({ title: target, excerpt: '要点开才知道这篇笔记在哪', missing: true, x, y });
+							return;
+						}
+						setPreview({ title: found.title, excerpt: found.excerpt, missing: false, x, y });
+					},
+					hidePreview: () => setPreview(null),
+				}), [index, path]);
+
+				const properties = React.useMemo(
+					() => (note === null ? { rows: [], body: '' } : parseProperties(note.text)),
+					[note],
+				);
+
+				const related = React.useMemo(() => ({
+					backlinks: backlinksOf(index, path),
+					outlinks: outlinksOf(index, path),
+				}), [index, path]);
+
+				// Any note this page sends you to opens as its own page, so following a
+				// backlink never loses the note you were reading.
+				const openRelated = React.useCallback((target) => {
+					if (target === undefined || target === '') return;
+					ctx.sidebarRight.openResource(noteAddress(target));
+				}, [ctx]);
+
 				// Memoised: editing re-renders this page on every keystroke, and
 				// re-parsing the whole note each time is the one expensive thing here.
 				// Only the note (or the link navigator) can change what the Markdown
 				// becomes.
 				const renderedMarkdown = React.useMemo(
-					() => (note === null ? null : renderMarkdown(note.text, navigate, outlineAnchors, jumpToAnchor)),
-					[note, navigate, outlineAnchors, jumpToAnchor],
+					() => (note === null ? null : renderMarkdown(note.text, navigate, outlineAnchors, jumpToAnchor, hints)),
+					[note, navigate, outlineAnchors, jumpToAnchor, hints],
 				);
 
 				// `[[笔记#标题]]` opened THIS page: the opener left the anchor in
@@ -2752,7 +3246,23 @@ window.__ModuleLoader__.load({
 								},
 							}, [
 								noteMeta('read'),
+								// Properties first: Obsidian's reading view puts them above the
+								// title, and they answer "what is this note" before the prose.
+								h(PropertiesCard, {
+									key: 'props',
+									rows: properties.rows,
+									onLink: navigate,
+									hints,
+								}),
 								h('div', { key: 'md' }, renderedMarkdown),
+								h(RelatedPanel, {
+									key: 'related',
+									backlinks: related.backlinks,
+									outlinks: related.outlinks,
+									onOpen: openRelated,
+									onRefresh: refreshIndex,
+									error: indexError,
+								}),
 							]);
 
 				const actions = editing
@@ -2857,6 +3367,9 @@ window.__ModuleLoader__.load({
 							overflowY: editing ? 'hidden' : 'auto',
 						},
 					}, body),
+					// The hover card lives outside the scrolling body: it is `fixed`, so the
+					// body's `overflow: auto` cannot clip it.
+					h(LinkPreview, { key: 'preview', preview }),
 					outlineOpen ? h('div', {
 						key: 'outline',
 						style: {
@@ -3245,6 +3758,15 @@ window.__ModuleLoader__.load({
 			TAB_KIND,
 			NOTE_TAB_ID,
 			NOTE_TAB_KIND,
+			// The graph reader's pieces, asserted by render-check without a mount.
+			parseProperties,
+			linkStatus,
+			backlinksOf,
+			outlinksOf,
+			previewOf,
+			PropertiesCard,
+			RelatedPanel,
+			LinkPreview,
 		};
 		return module.exports;
 	},

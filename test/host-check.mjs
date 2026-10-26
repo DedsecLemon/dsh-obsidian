@@ -233,6 +233,58 @@ expect('the tree refuses to enter a dot-directory',
   treeHidden.status === 400 && /hidden/i.test(String(treeHidden.body.error)),
   JSON.stringify(treeHidden.body))
 
+// ── links (the vault as a graph) ───────────────────────────────────────────
+// Backlinks, broken-link styling and hover previews all read this index: an error
+// here is silent in the panel (links simply stop being annotated), so it is pinned
+// against the real vault.
+const links = await call('GET', '/dsh-obsidian/links')
+expect('the link index answers', links.status === 200 && links.body !== undefined && links.body.notes !== undefined, links.status)
+const indexed = Object.keys(links.body.notes ?? {})
+expect('the index covers the vault', indexed.length >= 600 && links.body.truncated === false, indexed.length + ' notes, truncated=' + links.body.truncated)
+const withLinks = indexed.filter((path) => links.body.notes[path].links.length > 0)
+expect('the index found outgoing links', withLinks.length > 0, withLinks.length + ' notes with links')
+const firstEntry = links.body.notes[withLinks[0]]
+expect(
+  'an index entry carries title, excerpt and tags',
+  typeof firstEntry.title === 'string' && firstEntry.title !== ''
+    && typeof firstEntry.excerpt === 'string'
+    && Array.isArray(firstEntry.tags),
+  JSON.stringify({ title: firstEntry.title, tags: firstEntry.tags, excerptChars: firstEntry.excerpt.length }),
+)
+let resolvedSample = null
+for (const path of indexed) {
+  for (const link of links.body.notes[path].links) {
+    if (link.resolved !== null) { resolvedSample = { path, link }; break }
+  }
+  if (resolvedSample !== null) break
+}
+expect(
+  'a link resolves to a note that is itself indexed',
+  resolvedSample !== null && links.body.notes[resolvedSample.link.resolved] !== undefined,
+  resolvedSample === null ? 'no resolved link at all' : resolvedSample.link.target + ' -> ' + resolvedSample.link.resolved,
+)
+// Obsidian accepts `[[笔记.md]]`; the index is keyed without the extension.
+const mdSuffixed = indexed.some((path) => links.body.notes[path].links.some((link) => /\.(md|markdown)$/i.test(link.target) && link.resolved !== null))
+expect('a target written with .md resolves', mdSuffixed, '')
+// `[[#标题]]` points inside the note: an anchor, not an edge to another note.
+const anchorLeak = indexed.some((path) => links.body.notes[path].links.some((link) => String(link.target).startsWith('#')))
+expect('same-note anchors are not outgoing links', !anchorLeak, '')
+// Backlinks are the same edges read backwards; at least one must exist for the panel.
+let backlinkPairs = 0
+for (const path of indexed) {
+  for (const link of links.body.notes[path].links) {
+    if (link.resolved === null || link.resolved === path) continue
+    backlinkPairs += 1
+  }
+}
+expect('there are edges to read backwards', backlinkPairs > 0, backlinkPairs + ' edges')
+const refreshedIndex = await call('GET', '/dsh-obsidian/links?refresh=1')
+expect(
+  'a refresh rebuilds the index',
+  refreshedIndex.status === 200 && typeof refreshedIndex.body.generatedAt === 'number' && refreshedIndex.body.generatedAt >= links.body.generatedAt,
+  JSON.stringify({ first: links.body.generatedAt, refreshed: refreshedIndex.body.generatedAt }),
+)
+
 // ── search ─────────────────────────────────────────────────────────────────
 const search = await call('GET', '/dsh-obsidian/search?q=' + encodeURIComponent('知识库') + '&limit=10')
 expect('search scans the vault', search.status === 200 && search.body.filesScanned > 0, search.body.filesScanned + ' files')

@@ -106,6 +106,11 @@ const OUTLINE_NOTE_PATH = '大纲.md'
 const OUTLINE_NOTE = '# 一级\n\n段落\n\n## 二级甲\n\n文字\n\n### 三级\n\n文字\n\n## 二级乙\n\n文字\n'
 const OUTLINE_TEXTS = ['一级', '二级甲', '三级', '二级乙']
 
+// A note that exercises the graph reader: properties to show, one working link, one
+// link to nothing, and a backlink from elsewhere in the vault.
+const GRAPH_NOTE_PATH = '图谱笔记.md'
+const GRAPH_NOTE = '---\ntags: [demo]\ntype: note\n---\n# 图谱\n\n见 [[双向链接|别名]]，还有 [[不存在的笔记]]。\n'
+
 const requests = []
 const posts = []
 // The vault folder the reader has agreed to. `null` is the first-run state: the
@@ -161,7 +166,8 @@ global.fetch = (url, options) => {
     const query = target.indexOf('?path=') >= 0 ? decodeURIComponent(target.slice(target.indexOf('?path=') + 6)) : ''
     const text = query === SLOW_NOTE_PATH ? SLOW_NOTE_TEXT
       : (query === FAST_NOTE_PATH ? FAST_NOTE_TEXT
-        : (query === OUTLINE_NOTE_PATH ? OUTLINE_NOTE : NOTE))
+        : (query === OUTLINE_NOTE_PATH ? OUTLINE_NOTE
+          : (query === GRAPH_NOTE_PATH ? GRAPH_NOTE : NOTE)))
     body = { root: 'D:\\知识库', path: query, size: text.length, mtimeMs: Date.now(), truncated: false, text }
     // The stale answer is held until the harness releases it.
     if (query === deferNotePath && deferNotePath !== '') {
@@ -169,6 +175,33 @@ global.fetch = (url, options) => {
     }
   } else if (target.startsWith('/dsh-obsidian/resolve-link')) {
     body = { name: '双向链接', matches: [{ path: '笔记/知识索引.md', name: '知识索引.md' }], ambiguous: false }
+  } else if (target.startsWith('/dsh-obsidian/links')) {
+    // The vault as a graph. Two notes: the one on screen links out twice (one broken),
+    // and the index note links back, which is the edge the backlinks pane must show.
+    body = {
+      generatedAt: Date.now(),
+      vault: '知识库',
+      filesScanned: 2,
+      dirsScanned: 1,
+      truncated: false,
+      notes: {
+        [GRAPH_NOTE_PATH]: {
+          title: '图谱',
+          excerpt: '见 双向链接，还有 不存在的笔记',
+          tags: ['demo'],
+          links: [
+            { target: '双向链接', anchor: '', line: '见 [[双向链接|别名]]，还有 [[不存在的笔记]]。', resolved: '笔记/知识索引.md' },
+            { target: '不存在的笔记', anchor: '', line: '见 [[双向链接|别名]]，还有 [[不存在的笔记]]。', resolved: null },
+          ],
+        },
+        '笔记/知识索引.md': {
+          title: '知识索引',
+          excerpt: '索引的开头',
+          tags: [],
+          links: [{ target: '图谱', anchor: '', line: '相关：[[图谱]]', resolved: GRAPH_NOTE_PATH }],
+        },
+      },
+    }
   } else if (target.startsWith('/dsh-obsidian/search')) {
     const query = target.indexOf('?q=') >= 0 ? decodeURIComponent(target.slice(target.indexOf('?q=') + 3).split('&')[0]) : ''
     const hits = query === SLOW_SEARCH_QUERY
@@ -515,6 +548,59 @@ step('the note page renders the note and resolves its wikilinks', async () => {
   }
 
   noteRoot.unmount()
+  container.remove()
+})
+
+step('a note shows its properties, its edges and which of its links are broken', async () => {
+  const noteBody = registered.find((entry) => entry.metadata.key === api.__internals.NOTE_TAB_ID)
+  if (noteBody === undefined) throw new Error('the note tab body was not registered')
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const graphRoot = ReactDOMClient.createRoot(container)
+  graphRoot.render(React.createElement(noteBody.component, {
+    useTabInfo: () => ({ tab: { contentId: api.__internals.noteAddress(GRAPH_NOTE_PATH) } }),
+    inputActions: seatProps.inputActions,
+  }))
+  await flush()
+
+  // Properties: the frontmatter the renderer used to drop. `tags` and `type`, in order.
+  const properties = container.querySelector('[data-dsh-obsidian-properties]')
+  if (properties === null) throw new Error('the note page shows no properties')
+  if (properties.getAttribute('data-dsh-obsidian-properties') !== '2') {
+    throw new Error('the properties card counted ' + properties.getAttribute('data-dsh-obsidian-properties') + ' rows')
+  }
+  const propertiesText = properties.textContent || ''
+  if (!propertiesText.includes('tags') || !propertiesText.includes('demo')) throw new Error('the properties card lost tags: ' + propertiesText)
+  if (!propertiesText.includes('type')) throw new Error('the properties card lost type: ' + propertiesText)
+
+  // The graph, locally: one note links here, two links leave.
+  const related = container.querySelector('[data-dsh-obsidian-related]')
+  if (related === null) throw new Error('the note page shows no related panel')
+  if (related.getAttribute('data-dsh-obsidian-related') !== '1:2') {
+    throw new Error('wrong edge counts: ' + related.getAttribute('data-dsh-obsidian-related'))
+  }
+
+  // A link to a note that does not exist is drawn differently from a working one.
+  const broken = [...container.querySelectorAll('button')]
+    .find((button) => String(button.getAttribute('title') || '').includes('笔记不存在'))
+  if (broken === undefined) throw new Error('a broken link does not say it is broken')
+  if (!String(broken.getAttribute('style') || '').includes('dashed')) {
+    throw new Error('a broken link is not styled apart from a working one')
+  }
+
+  // Clicking a backlink opens that note as its own page.
+  openedResources.length = 0
+  const backlink = [...related.querySelectorAll('button')]
+    .find((button) => String(button.textContent || '').includes('知识索引'))
+  if (backlink === undefined) throw new Error('the backlink row did not render')
+  backlink.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  await flush()
+  const expected = api.__internals.noteAddress('笔记/知识索引.md')
+  if (openedResources.length !== 1 || openedResources[0] !== expected) {
+    throw new Error('the backlink did not open its note: ' + JSON.stringify(openedResources))
+  }
+
+  graphRoot.unmount()
   container.remove()
 })
 

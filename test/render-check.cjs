@@ -665,6 +665,90 @@ walkElements(api.__internals.renderMarkdown(longNote.join('\n')), (element) => {
 })
 if (!sawLastHeading) throw new Error('the render cap cut a 4,000-line note before its last heading')
 
+// ── properties (frontmatter) ───────────────────────────────────────────────
+// Frontmatter used to be dropped as "metadata, not prose". A sidebar reader wants
+// the opposite: what the note IS, and how it is filed.
+const parsed = api.__internals.parseProperties([
+  '---',
+  'title: "中国本土化发展"',
+  'type: entity',
+  'tags: [心理学, 沙盘游戏]',
+  'aliases:',
+  '  - 本土化',
+  '  - 中国文化',
+  'draft: true',
+  'weight: 12',
+  'created: 2026-06-06',
+  'parent: "[[沙盘游戏治疗]]"',
+  '---',
+  '',
+  '# 正文',
+].join('\n'))
+const kinds = Object.fromEntries(parsed.rows.map((row) => [row.key, row.kind]))
+if (kinds.title !== 'text') throw new Error('a quoted title is not text: ' + kinds.title)
+if (kinds.tags !== 'list') throw new Error('an inline list is not a list: ' + kinds.tags)
+if (kinds.aliases !== 'list') throw new Error('a block list is not a list: ' + kinds.aliases)
+if (kinds.draft !== 'boolean') throw new Error('a boolean property is not a boolean: ' + kinds.draft)
+if (kinds.weight !== 'number') throw new Error('a number property is not a number: ' + kinds.weight)
+if (kinds.created !== 'date') throw new Error('a date property is not a date: ' + kinds.created)
+if (parsed.rows.find((row) => row.key === 'aliases').value.length !== 2) throw new Error('a block list lost its items')
+if (parsed.body.includes('title:')) throw new Error('the body still carries frontmatter')
+if (!parsed.body.includes('# 正文')) throw new Error('the body lost its prose')
+const propertiesHtml = renderToStaticMarkup(React.createElement(api.__internals.PropertiesCard, {
+  rows: parsed.rows,
+  onLink: () => {},
+}))
+if (!propertiesHtml.includes('data-dsh-obsidian-properties="8"')) throw new Error('the properties card did not render every row')
+if (!propertiesHtml.includes('沙盘游戏治疗')) throw new Error('a link-valued property lost its link text')
+if (propertiesHtml.includes('title:</span>')) throw new Error('a property key leaked its YAML form')
+
+// ── broken-link styling + hover preview (link hints) ───────────────────────
+const hints = {
+  statusOf: (target) => (target === '不存在的笔记' ? { known: true, missing: true } : { known: true, missing: false }),
+  preview: () => {},
+  hidePreview: () => {},
+}
+const hintedHtml = renderToStaticMarkup(React.createElement('div', null,
+  api.__internals.renderMarkdown('[[存在]] 和 [[不存在的笔记]]\n', () => {}, undefined, () => {}, hints)))
+if (!hintedHtml.includes('笔记不存在：不存在的笔记')) throw new Error('a broken link does not say it is broken')
+if (!hintedHtml.includes('text-decoration-style:dashed')) throw new Error('a broken link is not styled apart from a working one')
+const status = api.__internals.linkStatus({ notes: { 'a.md': { links: [{ target: '存在', resolved: 'b.md' }, { target: '不存在', resolved: null }] } } }, 'a.md', '不存在')
+if (status.known !== true || status.missing !== true) throw new Error('linkStatus does not report a broken link')
+if (api.__internals.linkStatus(null, 'a.md', 'x').known !== false) throw new Error('linkStatus invented an opinion without an index')
+
+// Backlinks are derived from the index, not stored: the note never writes them.
+const index = {
+  notes: {
+    'a.md': { title: '甲', excerpt: '甲的开头', tags: [], links: [{ target: '乙', anchor: '', line: '见 [[乙]]', resolved: 'b.md' }] },
+    'b.md': { title: '乙', excerpt: '乙的开头', tags: [], links: [] },
+    'c.md': { title: '丙', excerpt: '丙的开头', tags: [], links: [{ target: '乙', anchor: '小节', line: '丙里提到 [[乙#小节]]', resolved: 'b.md' }] },
+  },
+}
+const backlinks = api.__internals.backlinksOf(index, 'b.md')
+if (backlinks.length !== 2) throw new Error('backlinks were not derived: ' + backlinks.length)
+if (backlinks[0].line === '' || backlinks[1].line === '') throw new Error('a backlink row lost the line that makes it')
+if (api.__internals.outlinksOf(index, 'a.md').length !== 1) throw new Error('outlinks were not derived')
+if (api.__internals.previewOf(index, '乙') === null || api.__internals.previewOf(index, '乙').title !== '乙') {
+  throw new Error('previewOf does not find a note by name')
+}
+const backHtml = renderToStaticMarkup(React.createElement(api.__internals.RelatedPanel, {
+  backlinks,
+  outlinks: api.__internals.outlinksOf(index, 'a.md'),
+  onOpen: () => {},
+  onRefresh: () => {},
+  error: '',
+}))
+if (!backHtml.includes('data-dsh-obsidian-related="2:1"')) throw new Error('the related panel did not count its edges')
+if (!backHtml.includes('引用本文') || !backHtml.includes('本文引用')) throw new Error('the related panel lost a section')
+const previewHtml = renderToStaticMarkup(React.createElement(api.__internals.LinkPreview, {
+  preview: { title: '乙', excerpt: '乙的开头', missing: false, x: 10, y: 10 },
+}))
+if (!previewHtml.includes('data-dsh-obsidian-preview="note"')) throw new Error('the hover card did not render')
+const missingPreview = renderToStaticMarkup(React.createElement(api.__internals.LinkPreview, {
+  preview: { title: '无', excerpt: '', missing: true, x: 10, y: 10 },
+}))
+if (!missingPreview.includes('这篇笔记不存在')) throw new Error('the hover card does not say when the target is missing')
+
 // ── report ─────────────────────────────────────────────────────────────────
 console.log('client.js harness OK')
 console.log('  tab type   :', tabType.kind, '-> id', tabType.id, 'title', JSON.stringify(tabType.title('')))

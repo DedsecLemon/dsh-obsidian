@@ -23,6 +23,7 @@ const ROUTE_CHAT = '/dsh-obsidian/chat'
 const ROUTE_RESOLVE = '/dsh-obsidian/resolve-link'
 const ROUTE_DIAG = '/dsh-obsidian/diag'
 const ROUTE_VAULT = '/dsh-obsidian/vault'
+const ROUTE_LINKS = '/dsh-obsidian/links'
 
 /** Directories that are never part of the note surface. */
 const SKIP_DIRS = new Set([
@@ -54,6 +55,25 @@ const MAX_SEARCH_LIMIT = 200
 const MAX_HITS_PER_FILE = 5
 /** Largest note this plugin will accept for saving back to disk. */
 const MAX_WRITE_BYTES = 4 * 1024 * 1024
+/**
+ * Bounds on the link index (`/links`).
+ *
+ * The index is what turns a note page into a graph reader: backlinks, broken-link
+ * styling and hover previews all read it. It is built by walking the vault once and
+ * reading every note, so it is bounded the way the search is — a vault that is
+ * really a checkout with a million files must not hang the panel. `truncated` says
+ * the index is partial rather than pretending it is whole.
+ */
+const MAX_INDEX_FILES = 3000
+const MAX_INDEX_DIRS = 5000
+const MAX_INDEX_DEPTH = 24
+const MAX_INDEX_BYTES = 32 * 1024 * 1024
+const MAX_INDEX_FILE_BYTES = 4 * 1024 * 1024
+/** A note's excerpt, and the source-line snippet a backlink row shows. */
+const EXCERPT_CHARS = 160
+const LINK_LINE_CHARS = 90
+/** How long an index is reused before the vault is walked again. */
+const INDEX_TTL_MS = 15000
 /**
  * Largest request body any route will buffer.
  *
@@ -581,6 +601,258 @@ function findNoteByTitle(root, name) {
 }
 
 /**
+ * Strip Markdown down to the prose an excerpt needs.
+ *
+ * Excerpts and link snippets are shown in a narrow sidebar, so headings, fences,
+ * table rows and link brackets only cost space. `[[target|alias]]` keeps the alias,
+ * which is the text the reader actually saw.
+ * @param markdown - note text (frontmatter not required to be stripped first).
+ * @param limit - characters to keep; longer text is cut at the limit.
+ */
+function plainTextOf(markdown, limit) {
+  const lines = String(markdown).replace(/\r\n?/g, '\n').split('\n')
+  const kept = []
+  let inFence = false
+  for (const line of lines) {
+    if (/^\s*```/.test(line)) {
+      inFence = !inFence
+      continue
+    }
+    if (inFence) continue
+    const trimmed = line.trim()
+    if (trimmed === '') continue
+    if (/^#{1,6}\s/.test(trimmed)) continue
+    if (/^\s*\|/.test(trimmed)) continue
+    if (/^---\s*$/.test(trimmed)) continue
+    if (/^\s*>/.test(trimmed)) continue
+    kept.push(trimmed.replace(/^\s*(?:[-*+]|\d+[.)])\s+/, ''))
+  }
+  const text = kept.join(' ')
+    .replace(/!?\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (match, target, alias) => (alias === undefined ? target : alias))
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/[*_~`]{1,3}/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (limit === undefined || text.length <= limit) return text
+  return text.slice(0, limit).trimEnd() + '…'
+}
+
+/**
+ * The subset of YAML frontmatter Obsidian actually writes.
+ *
+ * Scalars, quoted strings, inline lists (`tags: [a, b]`) and block lists
+ * (`tags:` then `- a`) are understood; a key whose value is a block list starts as
+ * `[]`. Anything unrecognised is skipped rather than guessed — this is metadata for
+ * an index, not a YAML parser.
+ * @returns `{ raw, body }` — `raw` keyed by field name, `body` without the block.
+ */
+function frontmatterOf(text) {
+  const match = /^(?:\uFEFF)?---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(String(text))
+  if (match === null) return { raw: {}, body: String(text) }
+  const raw = {}
+  let key = null
+  for (const line of match[1].split(/\r?\n/)) {
+    if (line.trim() === '' || /^\s*#/.test(line)) continue
+    const listItem = /^\s*-\s+(.*)$/.exec(line)
+    if (listItem !== null) {
+      if (key === null) continue
+      if (!Array.isArray(raw[key])) raw[key] = []
+      raw[key].push(listItem[1].trim())
+      continue
+    }
+    const pair = /^([A-Za-z0-9_\u4e00-\u9fa5-]+)\s*:\s*(.*)$/.exec(line)
+    if (pair === null) {
+      key = null
+      continue
+    }
+    key = pair[1]
+    const value = pair[2].trim()
+    if (value === '') {
+      raw[key] = []
+      continue
+    }
+    const inline = /^\[(.*)\]$/.exec(value)
+    raw[key] = inline === null
+      ? value.replace(/^["']|["']$/g, '')
+      : inline[1].split(',').map((item) => item.trim().replace(/^["']|["']$/g, '')).filter((item) => item !== '')
+  }
+  return { raw, body: String(text).slice(match[0].length) }
+}
+
+/** Obsidian's preference when several notes share a name: shortest path, then name. */
+function preferClosest(candidates) {
+  if (candidates.length === 0) return undefined
+  return [...candidates].sort((a, b) => a.length - b.length || a.localeCompare(b))[0]
+}
+
+/**
+ * Every note's identity and outgoing links, in one walk.
+ *
+ * Two passes: the first reads every note and records it in the by-name maps, the
+ * second resolves each recorded target. Resolving during the walk would make a link
+ * to a note that sorts later look broken, which is exactly the bug the note page
+ * used to show as a dead button.
+ * @param root - vault root.
+ */
+function buildLinkIndex(root) {
+  const notes = {}
+  const byPath = new Map()
+  const byBase = new Map()
+  let filesScanned = 0
+  let dirsScanned = 0
+  let bytesRead = 0
+  let skippedLarge = 0
+  let truncated = false
+
+  function walk(directory, depth) {
+    if (truncated) return
+    if (depth > MAX_INDEX_DEPTH) {
+      truncated = true
+      return
+    }
+    let dirents
+    try {
+      dirents = readdirSync(directory, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const dirent of dirents) {
+      if (truncated) return
+      if (dirent.name.startsWith('.') || SKIP_DIRS.has(dirent.name)) continue
+      const absolute = join(directory, dirent.name)
+      if (dirent.isDirectory()) {
+        if (dirsScanned >= MAX_INDEX_DIRS) {
+          truncated = true
+          return
+        }
+        dirsScanned += 1
+        walk(absolute, depth + 1)
+        continue
+      }
+      if (!dirent.isFile() || !/\.(md|markdown)$/i.test(dirent.name)) continue
+      if (filesScanned >= MAX_INDEX_FILES) {
+        truncated = true
+        return
+      }
+      filesScanned += 1
+      const rel = toVaultPath(root, absolute).replace(/\\/g, '/')
+      const withoutExt = rel.replace(/\.[^./]+$/, '')
+      byPath.set(withoutExt.toLowerCase(), rel)
+      const base = withoutExt.split('/').pop().toLowerCase()
+      if (!byBase.has(base)) byBase.set(base, [])
+      byBase.get(base).push(rel)
+
+      let stat
+      try {
+        stat = statSync(absolute)
+      } catch {
+        continue
+      }
+      if (stat.size > MAX_INDEX_FILE_BYTES) {
+        skippedLarge += 1
+        continue
+      }
+      if (bytesRead + stat.size > MAX_INDEX_BYTES) {
+        truncated = true
+        return
+      }
+      let text
+      try {
+        text = readFileSync(absolute, 'utf8')
+      } catch {
+        continue
+      }
+      bytesRead += stat.size
+
+      const parsed = frontmatterOf(text)
+      const heading = /^#{1,6}\s+(.*)$/m.exec(parsed.body)
+      const title = typeof parsed.raw.title === 'string' && parsed.raw.title !== ''
+        ? parsed.raw.title
+        : (heading !== null ? heading[1].replace(/\s+/g, ' ').trim() : withoutExt.split('/').pop())
+      const rawTags = parsed.raw.tags
+      const tags = (Array.isArray(rawTags) ? rawTags : (typeof rawTags === 'string' ? [rawTags] : []))
+        .map((tag) => String(tag).replace(/^#/, '').trim())
+        .filter((tag) => tag !== '')
+
+      const links = []
+      const seen = new Set()
+      let inFence = false
+      for (const line of parsed.body.split(/\r?\n/)) {
+        if (/^\s*```/.test(line)) {
+          inFence = !inFence
+          continue
+        }
+        if (inFence) continue
+        // Links inside inline code are not links (Obsidian does not linkify them).
+        const masked = line.replace(/`[^`\n]*`/g, (span) => ' '.repeat(span.length))
+        for (const match of masked.matchAll(/\[\[([^\]]+)\]\]/g)) {
+          const inner = match[1]
+          const bar = inner.indexOf('|')
+          // A table cell escapes the alias pipe (`\|`); the escape is not the target.
+          const rawTarget = (bar >= 0 ? inner.slice(0, bar) : inner).replace(/\\$/, '').trim()
+          if (rawTarget === '') continue
+          // `[[#标题]]` points inside this note: an anchor, not an outgoing link.
+          if (rawTarget.startsWith('#')) continue
+          const hash = rawTarget.indexOf('#')
+          const target = (hash > 0 ? rawTarget.slice(0, hash) : rawTarget).trim()
+          if (target === '') continue
+          const anchor = hash > 0 ? rawTarget.slice(hash + 1).trim() : ''
+          const key = target.toLowerCase() + '#' + anchor
+          if (seen.has(key)) continue
+          seen.add(key)
+          links.push({ target, anchor, line: plainTextOf(line, LINK_LINE_CHARS) })
+        }
+      }
+      notes[rel] = { title, excerpt: plainTextOf(parsed.body, EXCERPT_CHARS), tags, links }
+    }
+  }
+
+  walk(root, 0)
+
+  for (const entry of Object.values(notes)) {
+    for (const link of entry.links) {
+      const needle = link.target.toLowerCase().replace(/\\/g, '/').replace(/\/+$/, '')
+      // `[[笔记.md]]` is a legal Obsidian link; the maps are keyed without the extension.
+      const bare = needle.replace(/\.(md|markdown)$/i, '')
+      let resolved = byPath.get(needle)
+      if (resolved === undefined) resolved = byPath.get(bare)
+      if (resolved === undefined) resolved = preferClosest(byBase.get(needle) ?? [])
+      if (resolved === undefined) resolved = preferClosest(byBase.get(bare.split('/').pop()) ?? [])
+      link.resolved = resolved === undefined ? null : resolved
+    }
+  }
+
+  return {
+    generatedAt: Date.now(),
+    vault: basename(root),
+    filesScanned,
+    dirsScanned,
+    bytesRead,
+    skippedLarge,
+    truncated,
+    notes,
+  }
+}
+
+/** The index, reused for a short while: a note page reads it on every navigation. */
+let linkIndexMemo = null
+
+/**
+ * @param root - vault root.
+ * @param force - rebuild instead of reusing the memo.
+ */
+function linkIndex(root, force = false) {
+  const now = Date.now()
+  if (!force && linkIndexMemo !== null && linkIndexMemo.root === root && now - linkIndexMemo.at < INDEX_TTL_MS) {
+    return linkIndexMemo.value
+  }
+  const value = buildLinkIndex(root)
+  linkIndexMemo = { root, at: now, value }
+  return value
+}
+
+/**
  * The directory this plugin keeps its own state in.
  *
  * `DSH_HOME` is NOT always set — it is absent in this desktop profile — and
@@ -893,7 +1165,16 @@ function allowMethod(req, res) {
  * `test/platform-check.mjs` can assert **every** platform's candidate list, registry path
  * and opener from one machine.
  */
-export const __internals = Object.freeze({ candidateApps, configPath, uriDelivery })
+export const __internals = Object.freeze({
+  candidateApps,
+  configPath,
+  uriDelivery,
+  // The link index is the graph reader's whole data model; `host-check` asserts it
+  // against the real vault without going through HTTP.
+  buildLinkIndex,
+  frontmatterOf,
+  plainTextOf,
+})
 
 /**
  * Register the plugin's routes and tool against the host.
@@ -1089,6 +1370,25 @@ export function apply(ctx) {
           const name = new URL(req.url ?? '/', 'http://x').searchParams.get('name') ?? ''
           const matches = findNoteByTitle(root, name)
           sendJson(res, 200, { name, matches, ambiguous: matches.length > 1 })
+        } catch (error) {
+          sendFailure(res, error, 400)
+        }
+      },
+    })
+
+    // The vault as a graph: every note's title/excerpt/tags and where its `[[links]]`
+    // land. One walk, cached for `INDEX_TTL_MS`; `?refresh=1` rebuilds it, which is
+    // what the backlinks panel's refresh does after an edit.
+    http.webServer.register({
+      kind: 'exact',
+      path: ROUTE_LINKS,
+      handler: (req, res) => {
+        try {
+          if (!allowMethod(req, res)) return
+          const root = vaultRoot()
+          if (root === undefined) throw new Error('no Obsidian vault resolved')
+          const params = new URL(req.url ?? '/', 'http://x').searchParams
+          sendJson(res, 200, linkIndex(root, params.get('refresh') === '1'))
         } catch (error) {
           sendFailure(res, error, 400)
         }
