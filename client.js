@@ -788,7 +788,12 @@ window.__ModuleLoader__.load({
 
 		// ── markdown-lite ────────────────────────────────────────────────────
 
-		const INLINE = /(\[\[[^\]\n|]{1,200}(?:\|[^\]\n]{1,200})?\]\])|(`[^`\n]+`)|(\*\*[^*\n]+\*\*)|(~~[^~\n]+~~)|(\*[^*\n]+\*)|(\[[^\]\n]*\]\([^)\s]+\))/g;
+		// `==高亮==` is Obsidian's highlight mark. Two bounds are load-bearing:
+		// `[^=`]` stops a `====` run (and an empty mark) matching, and `[^`]` stops a
+		// single comparison marker (`a == b`) from pairing with a LATER `==` and
+		// swallowing the code span between them. Spaces are allowed inside because this
+		// vault writes `== 标题 ==` as well as `==句子==`.
+		const INLINE = /(\[\[[^\]\n|]{1,200}(?:\|[^\]\n]{1,200})?\]\])|(`[^`\n]+`)|(==[^=`\n]{1,400}==)|(\*\*[^*\n]+\*\*)|(~~[^~\n]+~~)|(\*[^*\n]+\*)|(\[[^\]\n]*\]\([^)\s]+\))/g;
 
 		/**
 		 * GitHub-flavoured heading slug — how some converted notes spell `[x](#锚点)`.
@@ -1144,6 +1149,19 @@ window.__ModuleLoader__.load({
 							padding: '0.15em 0.3em',
 						},
 					}, token.slice(1, -1)));
+				} else if (token.slice(0, 2) === '==') {
+					// Obsidian's highlight is a `<mark>`: same element, same default
+					// `--text-highlight-bg` (a 40% amber), so it reads the same here.
+					nodes.push(h('mark', {
+						key,
+						'data-dsh-obsidian-highlight': '',
+						style: {
+							background: 'rgba(255, 208, 0, 0.4)',
+							color: 'inherit',
+							borderRadius: 2,
+							padding: '0.05em 0.1em',
+						},
+					}, token.slice(2, -2)));
 				} else if (token.slice(0, 2) === '**') {
 					nodes.push(h('strong', { key, style: { fontWeight: 600 } }, token.slice(2, -2)));
 				} else if (token.slice(0, 2) === '~~') {

@@ -749,6 +749,27 @@ const missingPreview = renderToStaticMarkup(React.createElement(api.__internals.
 }))
 if (!missingPreview.includes('这篇笔记不存在')) throw new Error('the hover card does not say when the target is missing')
 
+// ── ==高亮== (Obsidian's highlight mark) ───────────────────────────────────
+// `==` is Obsidian's highlight, and it used to be shown literally. It must not
+// swallow a lone comparison (`a == b`), a `====` run, or text inside inline code.
+const highlightHtml = renderToStaticMarkup(React.createElement('div', null,
+  api.__internals.renderMarkdown('正文 ==重点== 结束，`==代码里的==` 与 a == b。\n')))
+if (!highlightHtml.includes('>重点</mark>')) throw new Error('==高亮== did not render as a highlight')
+if (!highlightHtml.includes('data-dsh-obsidian-highlight')) throw new Error('the highlight lost its marker attribute')
+if (/<mark[^>]*>[^<]*代码里的/.test(highlightHtml)) throw new Error('a highlight inside inline code was rendered')
+if (!highlightHtml.includes('a == b')) throw new Error('a single == comparison was treated as a highlight')
+if (highlightHtml.includes('==重点==')) throw new Error('the highlight markers leaked into the text')
+const tableHighlight = renderToStaticMarkup(React.createElement('div', null,
+  api.__internals.renderMarkdown('| 列 |\n| --- |\n| ==单元格== |\n')))
+if (!tableHighlight.includes('>单元格</mark>')) throw new Error('a highlight inside a table cell did not render')
+// The order matters: a lone `==` BEFORE a code span used to pair with the `==` inside
+// it and swallow the code. `[^`]` in the highlight body is what prevents that.
+const orderHtml = renderToStaticMarkup(React.createElement('div', null,
+  api.__internals.renderMarkdown('看 a == b 与 `==代码==` 再来 ==真高亮==。\n')))
+if (!orderHtml.includes('<code')) throw new Error('the code span next to a lone == was swallowed')
+if (!orderHtml.includes('>真高亮</mark>')) throw new Error('the real highlight after a code span did not render')
+if (/<mark[^>]*>[^<]*代码/.test(orderHtml)) throw new Error('the code span ended up inside a highlight')
+
 // ── report ─────────────────────────────────────────────────────────────────
 console.log('client.js harness OK')
 console.log('  tab type   :', tabType.kind, '-> id', tabType.id, 'title', JSON.stringify(tabType.title('')))

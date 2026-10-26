@@ -285,6 +285,11 @@ contents is otherwise all one colour whether or not half of it is broken. Hoveri
 shows a card with its title and the first line of the target; a target that does not exist
 says that instead of showing an empty card.
 
+**Highlights.** `==this==` renders as Obsidian's `<mark>` — the same 40% amber
+`--text-highlight-bg` — instead of showing its own markers. A lone `==` (a comparison in
+prose) stays literal, and a highlight body may not contain a backtick, so a comparison
+that sits before a code span cannot pair its marker with the one inside the span.
+
 **The typography is Obsidian's, transcribed.** The numbers in `READ` are the
 default theme's own reading-view values — 16px at line-height 1.5, the heading
 ladder (`1.618em`/`1.462em`/`1.318em`/`1.188em`/`1.076em`/`1em`) with its weights
