@@ -254,7 +254,17 @@ const indexed = Object.keys(links.body.notes ?? {})
 // vault this small was not truncated.
 const walked = links.body.filesScanned
 expect('the index walked the vault', typeof walked === 'number' && walked > 0, 'filesScanned=' + walked)
-expect('the index covers every note it walked', indexed.length === walked, indexed.length + ' notes / ' + walked + ' scanned')
+// `walked` counts every note the walker VISITED, including ones it then refuses to read:
+// `skippedLarge` is incremented before the size check and those files never reach
+// `notes`. So the honest invariant is `notes + skippedLarge === walked` — plain equality
+// would fail the day one note in the vault grows past MAX_INDEX_FILE_BYTES, which is a
+// vault fact, not a plugin bug.
+const skippedLarge = typeof links.body.skippedLarge === 'number' ? links.body.skippedLarge : 0
+expect(
+  'the index covers every note it could read',
+  indexed.length + skippedLarge === walked,
+  indexed.length + ' notes + ' + skippedLarge + ' too large / ' + walked + ' scanned',
+)
 expect('a vault of this size is not truncated', links.body.truncated === false, 'truncated=' + links.body.truncated)
 const withLinks = indexed.filter((path) => links.body.notes[path].links.length > 0)
 expect('the index found outgoing links', withLinks.length > 0, withLinks.length + ' notes with links')

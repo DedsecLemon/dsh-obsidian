@@ -46,13 +46,22 @@ expect('an explicit distributable files list is declared',
 // package.json reached 1.6.2 while package-lock.json still said 1.1.0. A catalog
 // that reads the lockfile then reports the plugin at 1.1.0 — a wrong version is
 // indistinguishable from a stale listing, and it makes every newer declaration
-// look missing. Keep the three numbers equal.
+// look missing. Keep the numbers equal.
 const lockfile = JSON.parse(readFileSync(resolve(repoRoot, 'package-lock.json'), 'utf8'))
 expect('the lockfile top-level version agrees with the manifest',
   lockfile.version === manifest.version, lockfile.version + ' vs ' + manifest.version)
 expect('the lockfile root entry version agrees with the manifest',
   lockfile.packages?.['']?.version === manifest.version,
   String(lockfile.packages?.['']?.version) + ' vs ' + manifest.version)
+
+// …and the FOURTH number: the client half reports its own build through `/diag`, which
+// is the first question after "I still see the old behaviour". It drifted too (1.6.0
+// while the package reached 1.6.3), because bumping it was only ever a convention.
+const clientSource = readFileSync(resolve(repoRoot, 'client.js'), 'utf8')
+const clientBuild = /CLIENT_BUILD = '([^']+)'/.exec(clientSource)?.[1]
+expect('the client reports a build', typeof clientBuild === 'string' && clientBuild !== '', String(clientBuild))
+expect('the client build agrees with the manifest',
+  clientBuild === manifest.version, String(clientBuild) + ' vs ' + manifest.version)
 
 // The two declarations the automatic review asked for.
 const compatibility = manifest.dsh?.compatibility ?? {}

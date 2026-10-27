@@ -4184,7 +4184,7 @@ window.__ModuleLoader__.load({
 		 * running the bundle I just installed?" is answerable without a console — it is
 		 * the first question after any "I still see the old behaviour" report.
 		 */
-		const CLIENT_BUILD = '1.6.0';
+		const CLIENT_BUILD = '1.6.4';
 
 		const registrationReport = { build: CLIENT_BUILD, ok: [], failed: [] };
 
