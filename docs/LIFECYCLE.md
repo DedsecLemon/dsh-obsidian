@@ -12,6 +12,13 @@ The script never boots the Electron app and never touches a real profile. It cre
 temporary profile, installs the **packed tarball** into it, exercises both halves of the
 *installed* copy, then removes the package and checks that nothing is left behind.
 
+> **The transcript further down is a historical run, recorded when the package was at
+> 1.2.1.** It is kept verbatim because it shows what the script actually prints. The
+> package's current version is in `package.json` — and the lockfile's two version fields
+> must match it, which `test/manifest-check.mjs` now asserts after they drifted once
+> (`package.json` 1.6.2 vs `package-lock.json` 1.1.0). Re-run the script above to record
+> the evidence at the current version.
+
 ## What it does, step by step
 
 | Step | What happens | Why it is evidence |

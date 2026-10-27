@@ -42,6 +42,18 @@ expect('license is declared', manifest.license === 'MIT', String(manifest.licens
 expect('an explicit distributable files list is declared',
   Array.isArray(manifest.files) && manifest.files.length > 0, (manifest.files ?? []).join(', '))
 
+// The lockfile carries the package's own version in TWO places, and both drifted:
+// package.json reached 1.6.2 while package-lock.json still said 1.1.0. A catalog
+// that reads the lockfile then reports the plugin at 1.1.0 — a wrong version is
+// indistinguishable from a stale listing, and it makes every newer declaration
+// look missing. Keep the three numbers equal.
+const lockfile = JSON.parse(readFileSync(resolve(repoRoot, 'package-lock.json'), 'utf8'))
+expect('the lockfile top-level version agrees with the manifest',
+  lockfile.version === manifest.version, lockfile.version + ' vs ' + manifest.version)
+expect('the lockfile root entry version agrees with the manifest',
+  lockfile.packages?.['']?.version === manifest.version,
+  String(lockfile.packages?.['']?.version) + ' vs ' + manifest.version)
+
 // The two declarations the automatic review asked for.
 const compatibility = manifest.dsh?.compatibility ?? {}
 expect('DSH compatibility is explicitly declared', typeof compatibility.dsh === 'string' && compatibility.dsh !== '',
