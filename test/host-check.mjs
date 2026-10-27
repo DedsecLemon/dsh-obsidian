@@ -246,7 +246,16 @@ expect('the tree refuses to enter a dot-directory',
 const links = await call('GET', '/dsh-obsidian/links')
 expect('the link index answers', links.status === 200 && links.body !== undefined && links.body.notes !== undefined, links.status)
 const indexed = Object.keys(links.body.notes ?? {})
-expect('the index covers the vault', indexed.length >= 600 && links.body.truncated === false, indexed.length + ' notes, truncated=' + links.body.truncated)
+// A fixed floor (`>= 600`) only held on the vault this was written on. The note
+// surface here is 77 notes — the rest of the .md files sit under `.claude/`, a
+// dot-directory the plugin deliberately excludes — so that floor could never pass
+// and said nothing about correctness. Assert the property that actually matters and
+// is true on any vault: every note the index WALKED made it into the payload, and a
+// vault this small was not truncated.
+const walked = links.body.filesScanned
+expect('the index walked the vault', typeof walked === 'number' && walked > 0, 'filesScanned=' + walked)
+expect('the index covers every note it walked', indexed.length === walked, indexed.length + ' notes / ' + walked + ' scanned')
+expect('a vault of this size is not truncated', links.body.truncated === false, 'truncated=' + links.body.truncated)
 const withLinks = indexed.filter((path) => links.body.notes[path].links.length > 0)
 expect('the index found outgoing links', withLinks.length > 0, withLinks.length + ' notes with links')
 const firstEntry = links.body.notes[withLinks[0]]
