@@ -185,12 +185,13 @@ global.fetch = (url, options) => {
   } else if (target.startsWith('/dsh-obsidian/resolve-link')) {
     body = { name: '双向链接', matches: [{ path: '笔记/知识索引.md', name: '知识索引.md' }], ambiguous: false }
   } else if (target.startsWith('/dsh-obsidian/links')) {
-    // The vault as a graph. Two notes: the one on screen links out twice (one broken),
-    // and the index note links back, which is the edge the backlinks pane must show.
+    // The vault as a graph. Three notes: the one on screen links out twice (one broken),
+    // the index note links back (the edge the backlinks pane must show), and the target
+    // itself — which is what the hover card reads its title and excerpt from.
     body = {
       generatedAt: Date.now(),
       vault: '知识库',
-      filesScanned: 2,
+      filesScanned: 3,
       dirsScanned: 1,
       truncated: false,
       notes: {
@@ -199,9 +200,15 @@ global.fetch = (url, options) => {
           excerpt: '见 双向链接，还有 不存在的笔记',
           tags: ['demo'],
           links: [
-            { target: '双向链接', anchor: '', line: '见 [[双向链接|别名]]，还有 [[不存在的笔记]]。', resolved: '笔记/知识索引.md' },
+            { target: '双向链接', anchor: '', line: '见 [[双向链接|别名]]，还有 [[不存在的笔记]]。', resolved: '双向链接.md' },
             { target: '不存在的笔记', anchor: '', line: '见 [[双向链接|别名]]，还有 [[不存在的笔记]]。', resolved: null },
           ],
+        },
+        '双向链接.md': {
+          title: '双向链接',
+          excerpt: '双向链接的开头：讲讲这条链接指向什么。',
+          tags: [],
+          links: [],
         },
         '笔记/知识索引.md': {
           title: '知识索引',
@@ -1304,6 +1311,49 @@ step('a slow note response cannot overwrite a newer note', async () => {
   await flush(12)
   if (container.textContent.includes(SLOW_NOTE_TEXT)) throw new Error('a stale note response overwrote the newer note')
   if (!container.textContent.includes(FAST_NOTE_TEXT)) throw new Error('the newer note was lost')
+
+  noteRoot.unmount()
+  container.remove()
+})
+
+step('hovering a wikilink previews the target from the vault index', async () => {
+  const noteBody = registered.find((entry) => entry.metadata.key === api.__internals.NOTE_TAB_ID)
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const noteRoot = ReactDOMClient.createRoot(container)
+  noteRoot.render(React.createElement(noteBody.component, {
+    useTabInfo: () => ({ tab: { contentId: api.__internals.noteAddress(GRAPH_NOTE_PATH) } }),
+    inputActions: seatProps.inputActions,
+    SessionProvider: (props) => props.children,
+    renderSlot: () => null,
+  }))
+  await flush()
+
+  const link = [...container.querySelectorAll('button')]
+    .find((button) => (button.textContent || '').includes('别名'))
+  if (link === undefined) throw new Error('the wikilink did not render on the graph note')
+
+  // Entering the link must raise the card, and the card must carry the index's own
+  // title and excerpt — not a second fetch. `relatedTarget: null` is React's signal
+  // that the pointer came from outside the element.
+  link.dispatchEvent(new window.MouseEvent('mouseover', { bubbles: true, relatedTarget: null }))
+  await flush()
+  const card = container.querySelector('[data-dsh-obsidian-preview]')
+  if (card === null) throw new Error('hovering a wikilink showed no preview card')
+  if (card.getAttribute('data-dsh-obsidian-preview') !== 'note') {
+    throw new Error('the card claims the target is missing: ' + (card.textContent || ''))
+  }
+  if (!(card.textContent || '').includes('双向链接')) throw new Error('the card does not name the target')
+  if (!(card.textContent || '').includes('双向链接的开头')) {
+    throw new Error('the card did not use the index excerpt: ' + (card.textContent || ''))
+  }
+
+  // Leaving must take it away again, or a card would follow the pointer around.
+  link.dispatchEvent(new window.MouseEvent('mouseout', { bubbles: true, relatedTarget: document.body }))
+  await flush()
+  if (container.querySelector('[data-dsh-obsidian-preview]') !== null) {
+    throw new Error('the preview card stayed after the pointer left the link')
+  }
 
   noteRoot.unmount()
   container.remove()
